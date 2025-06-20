@@ -3,7 +3,11 @@ package storage
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
+	"math/rand"
 	"time"
 
 	"errantdns.io/internal/cache"
@@ -12,15 +16,17 @@ import (
 
 // CachedStorage wraps a Storage implementation with caching
 type CachedStorage struct {
-	storage Storage
-	cache   cache.Cache
+	storage    Storage
+	cache      cache.Cache
+	tieBreaker string
 }
 
 // NewCachedStorage creates a new cached storage wrapper
-func NewCachedStorage(storage Storage, cache cache.Cache) *CachedStorage {
+func NewCachedStorage(storage Storage, cache cache.Cache, tieBreaker string) *CachedStorage {
 	return &CachedStorage{
-		storage: storage,
-		cache:   cache,
+		storage:    storage,
+		cache:      cache,
+		tieBreaker: tieBreaker,
 	}
 }
 
@@ -30,9 +36,9 @@ func (cs *CachedStorage) LookupRecord(ctx context.Context, query *models.LookupQ
 
 	// Check cache first
 	if records, found := cs.cache.Get(cacheKey); found {
-		// Apply selection to cached record array (placeholder for now)
+		// Apply selection to cached record array
 		if len(records) > 0 {
-			return records[0], nil // For now, just return first record
+			return cs.selectFromArray(records, query), nil
 		}
 	}
 
@@ -51,8 +57,8 @@ func (cs *CachedStorage) LookupRecord(ctx context.Context, query *models.LookupQ
 	ttl := time.Duration(records[0].TTL) * time.Second
 	cs.cache.Set(cacheKey, records, ttl)
 
-	// For now, just return the first record (we'll add tie-breaking next)
-	return records[0], nil
+	// Apply selection and return
+	return cs.selectFromArray(records, query), nil
 }
 
 // LookupRecords queries storage directly (no caching for multiple records)
@@ -231,4 +237,65 @@ func (cs *CachedStorage) invalidateDomain(name string) {
 	// 2. Cache key enumeration capabilities
 	// 3. Tagged cache entries
 	// For now, this covers the most common use cases
+}
+
+// selectFromArray applies tie-breaking logic to select one record from an array
+func (cs *CachedStorage) selectFromArray(records []*models.DNSRecord, query *models.LookupQuery) *models.DNSRecord {
+	if len(records) == 0 {
+		return nil
+	}
+
+	if len(records) == 1 {
+		return records[0]
+	}
+
+	switch cs.tieBreaker {
+	case "random":
+		// Use query-based seed for consistency within same query
+		seed := cs.generateSeed(query)
+		rng := rand.New(rand.NewSource(seed))
+		index := rng.Intn(len(records))
+		return records[index]
+
+	case "round_robin":
+		fallthrough
+	default:
+		// Round-robin based on time and query hash
+		index := cs.roundRobinIndex(query, len(records))
+		return records[index]
+	}
+}
+
+// generateSeed creates a deterministic seed based on the query
+func (cs *CachedStorage) generateSeed(query *models.LookupQuery) int64 {
+	h := fnv.New64a()
+	h.Write([]byte(query.Name))
+	h.Write([]byte(query.Type.String()))
+	// Add some time component for variation
+	timeComponent := time.Now().Unix() / 300 // Changes every 5 minutes
+	h.Write([]byte(fmt.Sprintf("%d", timeComponent)))
+	return int64(h.Sum64())
+}
+
+// roundRobinIndex calculates round-robin index based on time and query
+func (cs *CachedStorage) roundRobinIndex(query *models.LookupQuery, count int) int {
+	if count <= 1 {
+		return 0
+	}
+
+	// Create deterministic hash of query
+	h := md5.New()
+	h.Write([]byte(query.Name))
+	h.Write([]byte(query.Type.String()))
+	queryHash := h.Sum(nil)
+
+	// Convert first 8 bytes to uint64
+	queryValue := binary.BigEndian.Uint64(queryHash[:8])
+
+	// Add time component (changes every 5 seconds for better rotation)
+	timeComponent := uint64(time.Now().Unix() / 5)
+
+	// Combine and mod by count
+	combined := queryValue + timeComponent
+	return int(combined % uint64(count))
 }

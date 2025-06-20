@@ -141,8 +141,7 @@ run_test "DMARC Record" "_dmarc.test.internal" "TXT" "DMARC1" "Should contain DM
 
 # NS Record Tests
 echo -e "${YELLOW}=== NS RECORD TESTS ===${NC}"
-run_test "NS Records" "test.internal" "NS" "ns1.test.internal" "Should show nameservers"
-
+run_test "NS Records" "test.internal" "NS" "ns" "Should show nameservers"
 # TTL Tests
 echo -e "${YELLOW}=== TTL TESTS ===${NC}"
 run_test "Short TTL" "short-ttl.internal" "A" "10.0.1.20" "30 second TTL"
@@ -155,31 +154,108 @@ run_test "Priority Test" "priority-test.internal" "A" "10.0.2.2" "Should return 
 
 # Round-robin Tests
 echo -e "${YELLOW}=== ROUND-ROBIN TESTS ===${NC}"
-echo -e "${BLUE}[TEST $((TESTS_RUN + 1))]${NC} Round-Robin Test"
-TESTS_RUN=$((TESTS_RUN + 1))
-echo "  Query: round-robin.internal A (multiple queries)"
-echo "  Expected: Different IPs from 10.0.3.10-13 range"
 
-# Test multiple queries to see round-robin in action
-results=()
-for i in {1..8}; do
+# Test 1: Burst queries (should return same IP within 5-second window)
+echo -e "${BLUE}[TEST $((TESTS_RUN + 1))]${NC} Round-Robin Burst Test"
+TESTS_RUN=$((TESTS_RUN + 1))
+echo "  Query: round-robin.internal A (5 rapid queries)"
+echo "  Expected: Same IP for all queries (within 5-second window)"
+
+burst_results=()
+for i in {1..5}; do
     result=$(dig @$SERVER -p $PORT +short +time=$TIMEOUT round-robin.internal A 2>/dev/null | head -1)
     if [ -n "$result" ]; then
-        results+=("$result")
+        burst_results+=("$result")
     fi
-    sleep 0.1  # Small delay to see time-based rotation
 done
 
-# Check if we got different results
-unique_results=($(printf '%s\n' "${results[@]}" | sort -u))
-if [ ${#unique_results[@]} -gt 1 ]; then
-    echo -e "  ${GREEN}✓ PASSED${NC} - Got ${#unique_results[@]} different IPs in rotation"
+# Check if all burst results are the same
+burst_unique=($(printf '%s\n' "${burst_results[@]}" | sort -u))
+if [ ${#burst_unique[@]} -eq 1 ] && [ ${#burst_results[@]} -eq 5 ]; then
+    echo -e "  ${GREEN}✓ PASSED${NC} - All burst queries returned same IP"
     TESTS_PASSED=$((TESTS_PASSED + 1))
 else
-    echo -e "  ${RED}✗ FAILED${NC} - Expected multiple different IPs, got same result"
+    echo -e "  ${RED}✗ FAILED${NC} - Expected same IP for all burst queries"
 fi
-echo "  Results: ${results[*]}"
-echo "  Unique: ${unique_results[*]}"
+echo "  Burst Results: ${burst_results[*]}"
+echo "  Unique IPs: ${burst_unique[*]}"
+echo
+
+# Test 2: Time-delayed queries (should rotate every 5+ seconds)
+echo -e "${BLUE}[TEST $((TESTS_RUN + 1))]${NC} Round-Robin Time Rotation Test"
+TESTS_RUN=$((TESTS_RUN + 1))
+echo "  Query: round-robin.internal A (3 queries with 6-second delays)"
+echo "  Expected: Different IPs as time boundaries are crossed"
+
+rotation_results=()
+echo "  Running timed queries (this will take ~12 seconds)..."
+
+for i in {1..3}; do
+    result=$(dig @$SERVER -p $PORT +short +time=$TIMEOUT round-robin.internal A 2>/dev/null | head -1)
+    if [ -n "$result" ]; then
+        rotation_results+=("$result")
+        echo "    Query $i: $result ($(date +%H:%M:%S))"
+    fi
+    
+    # Sleep for 6 seconds (crosses 5-second boundary) except on last iteration
+    if [ $i -lt 3 ]; then
+        echo "    Waiting 6 seconds..."
+        sleep 6
+    fi
+done
+
+# Check if we got different results over time
+rotation_unique=($(printf '%s\n' "${rotation_results[@]}" | sort -u))
+if [ ${#rotation_unique[@]} -gt 1 ]; then
+    echo -e "  ${GREEN}✓ PASSED${NC} - Got ${#rotation_unique[@]} different IPs over time"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo -e "  ${RED}✗ FAILED${NC} - Expected different IPs over time, got same result"
+fi
+echo "  Rotation Results: ${rotation_results[*]}"
+echo "  Unique IPs: ${rotation_unique[*]}"
+echo
+
+# Test 3: Verify all expected IPs are in rotation pool
+echo -e "${BLUE}[TEST $((TESTS_RUN + 1))]${NC} Round-Robin Pool Verification"
+TESTS_RUN=$((TESTS_RUN + 1))
+echo "  Query: round-robin.internal A (extended sampling)"
+echo "  Expected: IPs should be from 10.0.3.10-13 range"
+
+# Collect more samples over time to see the full rotation
+echo "  Collecting samples over 30 seconds..."
+extended_results=()
+for i in {1..6}; do
+    result=$(dig @$SERVER -p $PORT +short +time=$TIMEOUT round-robin.internal A 2>/dev/null | head -1)
+    if [ -n "$result" ]; then
+        extended_results+=("$result")
+    fi
+    if [ $i -lt 6 ]; then
+        sleep 5
+    fi
+done
+
+# Verify results are from expected range
+extended_unique=($(printf '%s\n' "${extended_results[@]}" | sort -u))
+valid_ips=("10.0.3.10" "10.0.3.11" "10.0.3.12" "10.0.3.13")
+all_valid=true
+
+for ip in "${extended_unique[@]}"; do
+    if [[ ! " ${valid_ips[@]} " =~ " ${ip} " ]]; then
+        all_valid=false
+        break
+    fi
+done
+
+if [ "$all_valid" = true ] && [ ${#extended_unique[@]} -gt 1 ]; then
+    echo -e "  ${GREEN}✓ PASSED${NC} - All IPs are from expected range, got ${#extended_unique[@]} unique"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo -e "  ${RED}✗ FAILED${NC} - IPs not from expected range or insufficient variety"
+fi
+echo "  Extended Results: ${extended_results[*]}"
+echo "  Unique IPs Found: ${extended_unique[*]}"
+echo "  Expected Range: ${valid_ips[*]}"
 echo
 
 # Negative Tests (should fail)

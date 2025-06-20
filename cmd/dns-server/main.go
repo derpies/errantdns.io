@@ -65,7 +65,7 @@ func main() {
 		}
 
 		memCache := cache.NewMemoryCache(cacheConfig)
-		finalStorage = storage.NewCachedStorage(pgStorage, memCache)
+		finalStorage = storage.NewCachedStorage(pgStorage, memCache, cfg.Priority.TieBreaker)
 
 		log.Printf("Cache enabled: max entries=%d, cleanup interval=%v",
 			cfg.Cache.MaxEntries, cfg.Cache.CleanupInterval)
