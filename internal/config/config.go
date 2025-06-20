@@ -19,6 +19,9 @@ type Config struct {
 	// Cache configuration
 	Cache CacheConfig
 
+	// Priority configuration
+	Priority PriorityConfig
+
 	// Server behavior
 	MaxConcurrentQueries int
 	ShutdownTimeout      time.Duration
@@ -52,6 +55,11 @@ type CacheConfig struct {
 	DefaultTTL      time.Duration
 }
 
+// PriorityConfig holds priority selection configuration
+type PriorityConfig struct {
+	TieBreaker string // "round_robin" or "random"
+}
+
 // Load creates a new Config with values from environment variables or defaults
 func Load() *Config {
 	cfg := &Config{
@@ -83,12 +91,18 @@ func Load() *Config {
 			CleanupInterval: 60 * time.Second,
 			DefaultTTL:      300 * time.Second,
 		},
+
+		// Priority defaults
+		Priority: PriorityConfig{
+			TieBreaker: "round_robin",
+		},
 	}
 
 	// Override with environment variables
 	loadDNSConfig(cfg)
 	loadDatabaseConfig(cfg)
 	loadCacheConfig(cfg)
+	loadPriorityConfig(cfg)
 	loadServerConfig(cfg)
 
 	return cfg
@@ -192,6 +206,15 @@ func loadCacheConfig(cfg *Config) {
 	}
 }
 
+// loadPriorityConfig loads priority configuration from environment
+func loadPriorityConfig(cfg *Config) {
+	if env := os.Getenv("PRIORITY_TIE_BREAKER"); env != "" {
+		if env == "round_robin" || env == "random" {
+			cfg.Priority.TieBreaker = env
+		}
+	}
+}
+
 // loadServerConfig loads server behavior configuration from environment
 func loadServerConfig(cfg *Config) {
 	if env := os.Getenv("MAX_CONCURRENT_QUERIES"); env != "" {
@@ -226,6 +249,11 @@ func (c *Config) Validate() error {
 	// Cache validation
 	if err := c.Cache.Validate(); err != nil {
 		return fmt.Errorf("cache config error: %w", err)
+	}
+
+	// Priority validation
+	if err := c.Priority.Validate(); err != nil {
+		return fmt.Errorf("priority config error: %w", err)
 	}
 
 	// Server validation
@@ -283,6 +311,15 @@ func (cache *CacheConfig) Validate() error {
 		if cache.DefaultTTL < 0 {
 			return &ValidationError{Field: "DefaultTTL", Message: "cannot be negative"}
 		}
+	}
+
+	return nil
+}
+
+// Validate validates priority configuration
+func (priority *PriorityConfig) Validate() error {
+	if priority.TieBreaker != "round_robin" && priority.TieBreaker != "random" {
+		return &ValidationError{Field: "TieBreaker", Message: "must be 'round_robin' or 'random'"}
 	}
 
 	return nil

@@ -47,7 +47,7 @@ func main() {
 		ConnMaxIdleTime: cfg.Database.ConnMaxIdleTime,
 	}
 
-	pgStorage, err := storage.NewPostgresStorage(ctx, pool, cfg.Database.ConnectionName, storageConfig)
+	pgStorage, err := storage.NewPostgresStorage(ctx, pool, cfg.Database.ConnectionName, storageConfig, cfg.Priority.TieBreaker)
 	if err != nil {
 		log.Fatalf("Failed to create storage: %v", err)
 	}
@@ -65,7 +65,7 @@ func main() {
 		}
 
 		memCache := cache.NewMemoryCache(cacheConfig)
-		finalStorage = storage.NewCachedStorage(pgStorage, memCache)
+		finalStorage = storage.NewCachedStorage(pgStorage, memCache, cfg.Priority.TieBreaker)
 
 		log.Printf("Cache enabled: max entries=%d, cleanup interval=%v",
 			cfg.Cache.MaxEntries, cfg.Cache.CleanupInterval)
