@@ -11,8 +11,8 @@ import (
 // Cache interface defines the contract for DNS record caching
 type Cache interface {
 	// Basic operations
-	Get(key string) (*models.DNSRecord, bool)
-	Set(key string, record *models.DNSRecord, ttl time.Duration)
+	Get(key string) ([]*models.DNSRecord, bool)
+	Set(key string, records []*models.DNSRecord, ttl time.Duration)
 	Delete(key string)
 	Clear()
 
@@ -42,9 +42,8 @@ func (s *Stats) calculateHitRate() {
 	}
 }
 
-// cacheEntry represents a cached DNS record with expiration and access tracking
 type cacheEntry struct {
-	record     *models.DNSRecord
+	records    []*models.DNSRecord // <- Should be records (plural)
 	expiresAt  time.Time
 	lastAccess time.Time
 }
@@ -106,8 +105,8 @@ func NewMemoryCache(config *Config) *MemoryCache {
 	return cache
 }
 
-// Get retrieves a record from the cache
-func (c *MemoryCache) Get(key string) (*models.DNSRecord, bool) {
+// Get retrieves records from the cache
+func (c *MemoryCache) Get(key string) ([]*models.DNSRecord, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -129,11 +128,11 @@ func (c *MemoryCache) Get(key string) (*models.DNSRecord, bool) {
 	c.moveToFrontUnlocked(key)
 	c.stats.Hits++
 
-	return entry.record, true
+	return entry.records, true
 }
 
-// Set stores a record in the cache with TTL
-func (c *MemoryCache) Set(key string, record *models.DNSRecord, ttl time.Duration) {
+// Set stores records in the cache with TTL
+func (c *MemoryCache) Set(key string, records []*models.DNSRecord, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -142,7 +141,7 @@ func (c *MemoryCache) Set(key string, record *models.DNSRecord, ttl time.Duratio
 	// If key already exists, update it
 	if _, exists := c.data[key]; exists {
 		c.data[key] = &cacheEntry{
-			record:     record,
+			records:    records,
 			expiresAt:  now.Add(ttl),
 			lastAccess: now,
 		}
@@ -157,7 +156,7 @@ func (c *MemoryCache) Set(key string, record *models.DNSRecord, ttl time.Duratio
 
 	// Add new entry
 	c.data[key] = &cacheEntry{
-		record:     record,
+		records:    records,
 		expiresAt:  now.Add(ttl),
 		lastAccess: now,
 	}

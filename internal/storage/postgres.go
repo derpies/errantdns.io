@@ -3,8 +3,13 @@ package storage
 
 import (
 	"context"
+	"crypto/md5"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
+	"log"
+	"math/rand"
 	"time"
 
 	"errantdns.io/internal/models"
@@ -16,6 +21,7 @@ type Storage interface {
 	// Query operations
 	LookupRecord(ctx context.Context, query *models.LookupQuery) (*models.DNSRecord, error)
 	LookupRecords(ctx context.Context, query *models.LookupQuery) ([]*models.DNSRecord, error)
+	LookupRecordGroup(ctx context.Context, query *models.LookupQuery) ([]*models.DNSRecord, error)
 
 	// Management operations
 	CreateRecord(ctx context.Context, record *models.DNSRecord) error
@@ -32,6 +38,7 @@ type Storage interface {
 type PostgresStorage struct {
 	pool           *pgsqlpool.Pool
 	connectionName string
+	tieBreaker     string
 }
 
 // Config holds configuration for PostgreSQL storage
@@ -62,7 +69,7 @@ func DefaultConfig() *Config {
 }
 
 // NewPostgresStorage creates a new PostgreSQL storage instance
-func NewPostgresStorage(ctx context.Context, pool *pgsqlpool.Pool, connectionName string, config *Config) (*PostgresStorage, error) {
+func NewPostgresStorage(ctx context.Context, pool *pgsqlpool.Pool, connectionName string, config *Config, tieBreaker string) (*PostgresStorage, error) {
 	// Create connection config
 	connConfig := &pgsqlpool.ConnectionConfig{
 		Host:            config.Host,
@@ -85,42 +92,31 @@ func NewPostgresStorage(ctx context.Context, pool *pgsqlpool.Pool, connectionNam
 	return &PostgresStorage{
 		pool:           pool,
 		connectionName: connectionName,
+		tieBreaker:     tieBreaker,
 	}, nil
 }
 
-// LookupRecord finds a single DNS record matching the query
-// Returns the highest priority record if multiple records exist
+// LookupRecord finds a single DNS record matching the query using priority selection
+// Returns one record from the lowest priority group with tie-breaking
 func (s *PostgresStorage) LookupRecord(ctx context.Context, query *models.LookupQuery) (*models.DNSRecord, error) {
-	sqlQuery := `
-		SELECT id, name, record_type, target, ttl, priority, created_at, updated_at
-		FROM dns_records 
-		WHERE LOWER(name) = LOWER($1) AND record_type = $2
-		ORDER BY priority DESC
-		LIMIT 1
-	`
-
-	row := s.pool.QueryRow(ctx, s.connectionName, sqlQuery, query.Name, query.Type.String())
-
-	var record models.DNSRecord
-	err := row.Scan(
-		&record.ID,
-		&record.Name,
-		&record.RecordType,
-		&record.Target,
-		&record.TTL,
-		&record.Priority,
-		&record.CreatedAt,
-		&record.UpdatedAt,
-	)
-
+	// Get all records in the highest priority group (lowest priority number)
+	records, err := s.LookupRecordGroup(ctx, query)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil // No record found, not an error
-		}
-		return nil, fmt.Errorf("failed to scan record for %s %s: %w", query.Name, query.Type, err)
+		return nil, err
 	}
 
-	return &record, nil
+	if len(records) == 0 {
+		return nil, nil // No records found
+	}
+
+	// If only one record, return it
+	if len(records) == 1 {
+		return records[0], nil
+	}
+
+	// Apply tie-breaking for multiple records
+	selected := s.selectFromGroup(records, query)
+	return selected, nil
 }
 
 // LookupRecords finds all DNS records matching the query, ordered by priority
@@ -129,7 +125,7 @@ func (s *PostgresStorage) LookupRecords(ctx context.Context, query *models.Looku
 		SELECT id, name, record_type, target, ttl, priority, created_at, updated_at
 		FROM dns_records 
 		WHERE LOWER(name) = LOWER($1) AND record_type = $2
-		ORDER BY priority DESC
+		ORDER BY priority ASC
 	`
 
 	rows, err := s.pool.Query(ctx, s.connectionName, sqlQuery, query.Name, query.Type.String())
@@ -159,6 +155,66 @@ func (s *PostgresStorage) LookupRecords(ctx context.Context, query *models.Looku
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating records: %w", err)
+	}
+
+	return records, nil
+}
+
+// LookupRecordGroup finds all records with the same lowest priority for the query
+func (s *PostgresStorage) LookupRecordGroup(ctx context.Context, query *models.LookupQuery) ([]*models.DNSRecord, error) {
+	// First, get the lowest priority value
+	minPriorityQuery := `
+		SELECT MIN(priority) 
+		FROM dns_records 
+		WHERE LOWER(name) = LOWER($1) AND record_type = $2
+	`
+
+	row := s.pool.QueryRow(ctx, s.connectionName, minPriorityQuery, query.Name, query.Type.String())
+
+	var minPriority sql.NullInt32
+	err := row.Scan(&minPriority)
+	if err != nil {
+		if err == sql.ErrNoRows || !minPriority.Valid {
+			return nil, nil // No records found
+		}
+		return nil, fmt.Errorf("failed to get min priority for %s %s: %w", query.Name, query.Type, err)
+	}
+
+	// Now get all records with that minimum priority
+	recordsQuery := `
+		SELECT id, name, record_type, target, ttl, priority, created_at, updated_at
+		FROM dns_records 
+		WHERE LOWER(name) = LOWER($1) AND record_type = $2 AND priority = $3
+		ORDER BY id ASC
+	`
+
+	rows, err := s.pool.Query(ctx, s.connectionName, recordsQuery, query.Name, query.Type.String(), minPriority.Int32)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query record group for %s %s: %w", query.Name, query.Type, err)
+	}
+	defer rows.Close()
+
+	var records []*models.DNSRecord
+	for rows.Next() {
+		var record models.DNSRecord
+		err := rows.Scan(
+			&record.ID,
+			&record.Name,
+			&record.RecordType,
+			&record.Target,
+			&record.TTL,
+			&record.Priority,
+			&record.CreatedAt,
+			&record.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan record: %w", err)
+		}
+		records = append(records, &record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating record group: %w", err)
 	}
 
 	return records, nil
@@ -292,6 +348,73 @@ func (s *PostgresStorage) Health(ctx context.Context) error {
 // Close closes the database connection pool
 func (s *PostgresStorage) Close() error {
 	return s.pool.Close()
+}
+
+// selectFromGroup applies tie-breaking logic to select one record from a group
+func (s *PostgresStorage) selectFromGroup(records []*models.DNSRecord, query *models.LookupQuery) *models.DNSRecord {
+	if len(records) == 0 {
+		return nil
+	}
+
+	if len(records) == 1 {
+		return records[0]
+	}
+
+	switch s.tieBreaker {
+	case "random":
+		// Use query-based seed for consistency within same query
+		seed := s.generateSeed(query)
+		rng := rand.New(rand.NewSource(seed))
+		index := rng.Intn(len(records))
+		return records[index]
+
+	case "round_robin":
+		fallthrough
+	default:
+		// Round-robin based on time and query hash
+		index := s.roundRobinIndex(query, len(records))
+		return records[index]
+	}
+}
+
+// generateSeed creates a deterministic seed based on the query
+func (s *PostgresStorage) generateSeed(query *models.LookupQuery) int64 {
+	h := fnv.New64a()
+	h.Write([]byte(query.Name))
+	h.Write([]byte(query.Type.String()))
+	// Add some time component for variation
+	timeComponent := time.Now().Unix() / 300 // Changes every 5 minutes
+	h.Write([]byte(fmt.Sprintf("%d", timeComponent)))
+	return int64(h.Sum64())
+}
+
+// roundRobinIndex calculates round-robin index based on time and query
+func (s *PostgresStorage) roundRobinIndex(query *models.LookupQuery, count int) int {
+	if count <= 1 {
+		return 0
+	}
+
+	// Create deterministic hash of query
+	h := md5.New()
+	h.Write([]byte(query.Name))
+	h.Write([]byte(query.Type.String()))
+	queryHash := h.Sum(nil)
+
+	// Convert first 8 bytes to uint64
+	queryValue := binary.BigEndian.Uint64(queryHash[:8])
+
+	// Add time component (changes every 30 seconds for reasonable rotation)
+	timeComponent := uint64(time.Now().Unix() / 30)
+
+	// Combine and mod by count
+	combined := queryValue + timeComponent
+	result := int(combined % uint64(count))
+
+	// DEBUG: Add this logging
+	log.Printf("RoundRobin DEBUG - queryValue: %d, timeComponent: %d, combined: %d, count: %d, result: %d",
+		queryValue, timeComponent, combined, count, result)
+
+	return result
 }
 
 // InitializeSchema creates the DNS records table using a schema file

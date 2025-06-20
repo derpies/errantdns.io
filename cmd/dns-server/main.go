@@ -47,7 +47,7 @@ func main() {
 		ConnMaxIdleTime: cfg.Database.ConnMaxIdleTime,
 	}
 
-	pgStorage, err := storage.NewPostgresStorage(ctx, pool, cfg.Database.ConnectionName, storageConfig)
+	pgStorage, err := storage.NewPostgresStorage(ctx, pool, cfg.Database.ConnectionName, storageConfig, cfg.Priority.TieBreaker)
 	if err != nil {
 		log.Fatalf("Failed to create storage: %v", err)
 	}

@@ -63,45 +63,55 @@ CREATE TRIGGER trigger_dns_records_updated_at
 -- Insert sample DNS records for testing and development
 INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
     -- Basic A records for test.internal domain
-    ('test.internal', 'A', '10.0.0.10', 300, 0),
-    ('www.test.internal', 'A', '10.0.0.10', 300, 0),
-    ('mail.test.internal', 'A', '10.0.0.20', 300, 0),
-    ('api.test.internal', 'A', '10.0.0.30', 300, 0),
+    ('test.internal', 'A', '10.0.0.10', 300, 10),
+    ('www.test.internal', 'A', '10.0.0.10', 300, 10),
+    ('mail.test.internal', 'A', '10.0.0.20', 300, 10),
+    ('api.test.internal', 'A', '10.0.0.30', 300, 10),
     
     -- AAAA records (IPv6)
-    ('test.internal', 'AAAA', 'fd00::1', 300, 0),
-    ('www.test.internal', 'AAAA', 'fd00::1', 300, 0),
+    ('test.internal', 'AAAA', 'fd00::1', 300, 10),
+    ('www.test.internal', 'AAAA', 'fd00::1', 300, 10),
     
     -- CNAME records
-    ('ftp.test.internal', 'CNAME', 'www.test.internal', 300, 0),
-    ('blog.test.internal', 'CNAME', 'www.test.internal', 300, 0),
+    ('ftp.test.internal', 'CNAME', 'www.test.internal', 300, 10),
+    ('blog.test.internal', 'CNAME', 'www.test.internal', 300, 10),
     
-    -- MX records (priority matters here)
+    -- MX records (priority matters here - lower number = higher priority)
     ('test.internal', 'MX', 'mail.test.internal', 300, 10),
     ('test.internal', 'MX', 'mail2.test.internal', 300, 20),
     
     -- TXT records
-    ('test.internal', 'TXT', 'v=spf1 include:_spf.test.internal ~all', 300, 0),
-    ('_dmarc.test.internal', 'TXT', 'v=DMARC1; p=none; ruf=mailto:dmarc@test.internal', 300, 0),
+    ('test.internal', 'TXT', 'v=spf1 include:_spf.test.internal ~all', 300, 10),
+    ('_dmarc.test.internal', 'TXT', 'v=DMARC1; p=none; ruf=mailto:dmarc@test.internal', 300, 10),
     
     -- NS records
-    ('test.internal', 'NS', 'ns1.test.internal', 86400, 0),
-    ('test.internal', 'NS', 'ns2.test.internal', 86400, 0),
+    ('test.internal', 'NS', 'ns1.test.internal', 86400, 10),
+    ('test.internal', 'NS', 'ns2.test.internal', 86400, 10),
     
     -- Additional test domains with creative names
-    ('errant-dns-test.internal', 'A', '10.0.1.10', 60, 0),
-    ('short-ttl.internal', 'A', '10.0.1.20', 30, 0),
-    ('long-ttl.internal', 'A', '10.0.1.30', 3600, 0),
+    ('errant-dns-test.internal', 'A', '10.0.1.10', 60, 10),
+    ('short-ttl.internal', 'A', '10.0.1.20', 30, 10),
+    ('long-ttl.internal', 'A', '10.0.1.30', 3600, 10),
     
     -- Fun test domains
-    ('dns-cache-test.internal', 'A', '10.0.2.10', 120, 0),
-    ('priority-test.internal', 'A', '10.0.2.20', 300, 100),
-    ('priority-test.internal', 'A', '10.0.2.21', 300, 50),
+    ('dns-cache-test.internal', 'A', '10.0.2.10', 120, 10),
+    
+    -- Priority test records - tied priorities for testing round-robin
+    ('priority-test.internal', 'A', '10.0.2.20', 300, 10),  -- Highest priority
+    ('priority-test.internal', 'A', '10.0.2.21', 300, 10),  -- Tied for highest priority
+    ('priority-test.internal', 'A', '10.0.2.22', 300, 10),  -- Tied for highest priority
+    ('priority-test.internal', 'A', '10.0.2.30', 300, 20),  -- Lower priority (should not be returned)
+    
+    -- Round-robin test records - multiple records with same priority
+    ('round-robin.internal', 'A', '10.0.3.10', 300, 10),
+    ('round-robin.internal', 'A', '10.0.3.11', 300, 10),
+    ('round-robin.internal', 'A', '10.0.3.12', 300, 10),
+    ('round-robin.internal', 'A', '10.0.3.13', 300, 10),
     
     -- Wildcard preparation domains (for future wildcard testing)
-    ('wildcard-parent.internal', 'A', '10.0.3.10', 300, 0),
-    ('sub1.wildcard-parent.internal', 'A', '10.0.3.11', 300, 0),
-    ('sub2.wildcard-parent.internal', 'A', '10.0.3.12', 300, 0)
+    ('wildcard-parent.internal', 'A', '10.0.4.10', 300, 10),
+    ('sub1.wildcard-parent.internal', 'A', '10.0.4.11', 300, 10),
+    ('sub2.wildcard-parent.internal', 'A', '10.0.4.12', 300, 10)
 ON CONFLICT DO NOTHING;
 
 -- Create a view for easier record management and reporting

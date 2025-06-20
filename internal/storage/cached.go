@@ -29,29 +29,42 @@ func (cs *CachedStorage) LookupRecord(ctx context.Context, query *models.LookupQ
 	cacheKey := query.CacheKey()
 
 	// Check cache first
-	if record, found := cs.cache.Get(cacheKey); found {
-		return record, nil
+	if records, found := cs.cache.Get(cacheKey); found {
+		// Apply selection to cached record array (placeholder for now)
+		if len(records) > 0 {
+			return records[0], nil // For now, just return first record
+		}
 	}
 
-	// Cache miss - query storage
-	record, err := cs.storage.LookupRecord(ctx, query)
+	// Cache miss - query storage for record group
+	records, err := cs.storage.LookupRecordGroup(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
-	// If record found, cache it using the record's TTL
-	if record != nil {
-		ttl := time.Duration(record.TTL) * time.Second
-		cs.cache.Set(cacheKey, record, ttl)
+	// If no records found, return nil
+	if len(records) == 0 {
+		return nil, nil
 	}
 
-	return record, nil
+	// Cache the entire group using the first record's TTL
+	ttl := time.Duration(records[0].TTL) * time.Second
+	cs.cache.Set(cacheKey, records, ttl)
+
+	// For now, just return the first record (we'll add tie-breaking next)
+	return records[0], nil
 }
 
 // LookupRecords queries storage directly (no caching for multiple records)
 // Multiple records are less commonly cached and more complex to manage
 func (cs *CachedStorage) LookupRecords(ctx context.Context, query *models.LookupQuery) ([]*models.DNSRecord, error) {
 	return cs.storage.LookupRecords(ctx, query)
+}
+
+// LookupRecordGroup queries storage directly (no caching for record groups)
+// Record groups change based on tie-breaking logic and are complex to cache
+func (cs *CachedStorage) LookupRecordGroup(ctx context.Context, query *models.LookupQuery) ([]*models.DNSRecord, error) {
+	return cs.storage.LookupRecordGroup(ctx, query)
 }
 
 // CreateRecord creates a record and invalidates cache
@@ -133,9 +146,10 @@ func (cs *CachedStorage) Health(ctx context.Context) error {
 		TTL:        1,
 	}
 
-	// Test cache operations
-	cs.cache.Set(testKey, testRecord, time.Second)
-	if _, found := cs.cache.Get(testKey); !found {
+	// Test cache operations with record array
+	testRecords := []*models.DNSRecord{testRecord}
+	cs.cache.Set(testKey, testRecords, time.Second)
+	if records, found := cs.cache.Get(testKey); !found || len(records) == 0 {
 		return fmt.Errorf("cache health check failed: unable to retrieve test record")
 	}
 	cs.cache.Delete(testKey)

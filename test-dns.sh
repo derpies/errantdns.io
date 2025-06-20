@@ -151,7 +151,36 @@ run_test "Cache Test" "dns-cache-test.internal" "A" "10.0.2.10" "Cache behavior 
 
 # Priority Tests
 echo -e "${YELLOW}=== PRIORITY TESTS ===${NC}"
-run_test "Priority Test" "priority-test.internal" "A" "10.0.2.20" "Should return highest priority (100)"
+run_test "Priority Test" "priority-test.internal" "A" "10.0.2.2" "Should return priority 10 records (not priority 20)"
+
+# Round-robin Tests
+echo -e "${YELLOW}=== ROUND-ROBIN TESTS ===${NC}"
+echo -e "${BLUE}[TEST $((TESTS_RUN + 1))]${NC} Round-Robin Test"
+TESTS_RUN=$((TESTS_RUN + 1))
+echo "  Query: round-robin.internal A (multiple queries)"
+echo "  Expected: Different IPs from 10.0.3.10-13 range"
+
+# Test multiple queries to see round-robin in action
+results=()
+for i in {1..8}; do
+    result=$(dig @$SERVER -p $PORT +short +time=$TIMEOUT round-robin.internal A 2>/dev/null | head -1)
+    if [ -n "$result" ]; then
+        results+=("$result")
+    fi
+    sleep 0.1  # Small delay to see time-based rotation
+done
+
+# Check if we got different results
+unique_results=($(printf '%s\n' "${results[@]}" | sort -u))
+if [ ${#unique_results[@]} -gt 1 ]; then
+    echo -e "  ${GREEN}✓ PASSED${NC} - Got ${#unique_results[@]} different IPs in rotation"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo -e "  ${RED}✗ FAILED${NC} - Expected multiple different IPs, got same result"
+fi
+echo "  Results: ${results[*]}"
+echo "  Unique: ${unique_results[*]}"
+echo
 
 # Negative Tests (should fail)
 echo -e "${YELLOW}=== NEGATIVE TESTS ===${NC}"
