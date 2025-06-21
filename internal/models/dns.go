@@ -10,14 +10,19 @@ import (
 
 // DNSRecord represents a DNS record from storage
 type DNSRecord struct {
-	ID         int       `db:"id"`
-	Name       string    `db:"name"`
-	RecordType string    `db:"record_type"`
-	Target     string    `db:"target"`
-	TTL        uint32    `db:"ttl"`
-	Priority   int       `db:"priority"`
-	CreatedAt  time.Time `db:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at"`
+	ID              int       `db:"id"`
+	Name            string    `db:"name"`
+	RecordType      string    `db:"record_type"`
+	Target          string    `db:"target"`
+	TTL             uint32    `db:"ttl"`
+	Priority        int       `db:"priority"`
+	CreatedAt       time.Time `db:"created_at"`
+	UpdatedAt       time.Time `db:"updated_at"`
+	ETLD            string    `db:"etld"`
+	ApexDomain      string    `db:"apex_domain"`
+	SubdomainLabels []string  `db:"subdomain_labels"`
+	IsWildcard      bool      `db:"is_wildcard"`
+	WildcardMask    uint64    `db:"wildcard_mask"` //bitstring
 }
 
 // RecordType represents supported DNS record types
@@ -30,12 +35,15 @@ const (
 	RecordTypeTXT   RecordType = "TXT"
 	RecordTypeMX    RecordType = "MX"
 	RecordTypeNS    RecordType = "NS"
+	RecordTypeSOA   RecordType = "SOA"
+	RecordTypePTR   RecordType = "PTR"
+	RecordTypeSRV   RecordType = "SRV"
 )
 
 // IsValid returns true if the record type is supported
 func (rt RecordType) IsValid() bool {
 	switch rt {
-	case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeTXT, RecordTypeMX, RecordTypeNS:
+	case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeTXT, RecordTypeMX, RecordTypeNS, RecordTypeSOA, RecordTypePTR, RecordTypeSRV:
 		return true
 	default:
 		return false
@@ -89,25 +97,40 @@ func (r *DNSRecord) Validate() error {
 	// Type-specific validation
 	switch recordType {
 	case RecordTypeA:
-		if ip := net.ParseIP(r.Target); ip == nil || ip.To4() == nil {
-			return fmt.Errorf("invalid IPv4 address: %s", r.Target)
+		if err := r.validateARecord(); err != nil {
+			return fmt.Errorf("invalid A record: %s: %w", r.Target, err)
 		}
 	case RecordTypeAAAA:
-		if ip := net.ParseIP(r.Target); ip == nil || ip.To4() != nil {
-			return fmt.Errorf("invalid IPv6 address: %s", r.Target)
+		if err := r.validateAAAARecord(); err != nil {
+			return fmt.Errorf("invalid AAAA record: %s: %w", r.Target, err)
 		}
-	case RecordTypeCNAME, RecordTypeNS:
-		if !isValidDomainName(r.Target) {
-			return fmt.Errorf("invalid domain name: %s", r.Target)
+	case RecordTypeCNAME:
+		if err := r.validateCNAMERecord(); err != nil {
+			return fmt.Errorf("invalid CNAME record: %s: %w", r.Target, err)
 		}
 	case RecordTypeMX:
-		if !isValidDomainName(r.Target) {
-			return fmt.Errorf("invalid MX target domain: %s", r.Target)
+		if err := r.validateMXTarget(); err != nil {
+			return fmt.Errorf("invalid MX target domain: %s: %w", r.Target, err)
 		}
 	case RecordTypeTXT:
 		// TXT records can contain any text, minimal validation
-		if len(r.Target) > 255 {
+		if err := r.validateTXTRecord(); err != nil {
 			return fmt.Errorf("TXT record too long: %d characters", len(r.Target))
+		}
+	case RecordTypeSOA:
+		if err := r.validateSOARecord(); err != nil {
+			return fmt.Errorf("invalid SOA target domain: %s: %w", r.Target, err)
+		}
+	case RecordTypePTR:
+		if err := r.validatePTRRecord(); err != nil {
+			return fmt.Errorf("invalid PTR record: %s: %w", r.Target, err)
+		}
+		if err := r.validatePTRName(); err != nil {
+			return fmt.Errorf("invalid PTR name: %s: %w", r.Name, err)
+		}
+	case RecordTypeNS:
+		if err := r.validateNSRecord(); err != nil {
+			return fmt.Errorf("invalid NS record: %s: %w", r.Target, err)
 		}
 	}
 
@@ -135,38 +158,6 @@ func (r *DNSRecord) Normalize() {
 			r.Target = ip.String()
 		}
 	}
-}
-
-// isValidDomainName performs basic domain name validation
-func isValidDomainName(domain string) bool {
-	if len(domain) == 0 || len(domain) > 253 {
-		return false
-	}
-
-	// Remove trailing dot if present
-	domain = strings.TrimSuffix(domain, ".")
-
-	// Split into labels
-	labels := strings.Split(domain, ".")
-	if len(labels) == 0 {
-		return false
-	}
-
-	for _, label := range labels {
-		if len(label) == 0 || len(label) > 63 {
-			return false
-		}
-
-		// Basic character validation - letters, numbers, hyphens
-		for i, r := range label {
-			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-				(r >= '0' && r <= '9') || (r == '-' && i > 0 && i < len(label)-1)) {
-				return false
-			}
-		}
-	}
-
-	return true
 }
 
 // RecordSet represents a collection of DNS records for the same name/type
