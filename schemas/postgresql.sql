@@ -135,6 +135,51 @@ INSERT INTO dns_records (name, record_type, target, ttl, priority, weight, port)
 INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
     ('10.0.0.10.in-addr.arpa', 'PTR', 'test.internal', 300, 10);
 
+-- Additional PTR records for reverse DNS
+INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
+('20.0.0.10.in-addr.arpa', 'PTR', 'mail.test.internal', 300, 10),
+('30.0.0.10.in-addr.arpa', 'PTR', 'api.test.internal', 300, 10),
+-- IPv6 PTR record (fd00::1 reverse)
+('1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.f.ip6.arpa', 'PTR', 'test.internal', 300, 10);
+
+-- Additional SRV records for service discovery
+INSERT INTO dns_records (name, record_type, target, ttl, priority, weight, port) VALUES
+-- HTTPS service
+('_https._tcp.test.internal', 'SRV', 'www.test.internal', 300, 10, 5, 443),
+-- SMTP service  
+('_smtp._tcp.test.internal', 'SRV', 'mail.test.internal', 300, 10, 5, 25),
+-- IMAP service
+('_imap._tcp.test.internal', 'SRV', 'mail.test.internal', 300, 10, 5, 143),
+-- SIP service
+('_sip._tcp.test.internal', 'SRV', 'sip.test.internal', 300, 10, 5, 5060),
+-- LDAP service  
+('_ldap._tcp.test.internal', 'SRV', 'ldap.test.internal', 300, 10, 5, 389),
+-- Multiple SRV with different priorities (for priority testing)
+('_web._tcp.test.internal', 'SRV', 'web1.test.internal', 300, 10, 5, 80),
+('_web._tcp.test.internal', 'SRV', 'web2.test.internal', 300, 20, 5, 80),
+('_web._tcp.test.internal', 'SRV', 'web3.test.internal', 300, 30, 5, 80),
+-- Multiple SRV with same priority but different weights (for weight testing)
+('_cluster._tcp.test.internal', 'SRV', 'node1.test.internal', 300, 10, 10, 8080),
+('_cluster._tcp.test.internal', 'SRV', 'node2.test.internal', 300, 10, 20, 8080),
+('_cluster._tcp.test.internal', 'SRV', 'node3.test.internal', 300, 10, 30, 8080);
+
+-- Additional A records needed for SRV targets
+INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
+('sip.test.internal', 'A', '10.0.0.40', 300, 10),
+('ldap.test.internal', 'A', '10.0.0.50', 300, 10),
+('web1.test.internal', 'A', '10.0.5.10', 300, 10),
+('web2.test.internal', 'A', '10.0.5.20', 300, 10),
+('web3.test.internal', 'A', '10.0.5.30', 300, 10),
+('node1.test.internal', 'A', '10.0.6.10', 300, 10),
+('node2.test.internal', 'A', '10.0.6.20', 300, 10),
+('node3.test.internal', 'A', '10.0.6.30', 300, 10);
+
+-- Additional NS records for the hosts that need A records
+INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
+('ns1.test.internal', 'A', '10.0.0.100', 86400, 10),
+('ns2.test.internal', 'A', '10.0.0.101', 86400, 10),
+('mail2.test.internal', 'A', '10.0.0.21', 300, 10);
+
 -- Create a view for easier record management and reporting
 CREATE OR REPLACE VIEW dns_records_view AS
 SELECT 

@@ -68,8 +68,8 @@ run_test() {
             print_test_failure "No result returned" "(empty)"
         fi
     else
-        # Check if result matches expected (basic string matching)
-        if echo "$result" | grep -q "$expected" || [ "$expected" = "ANY" ]; then
+        # Check if result matches any of the expected values
+        if check_expected_match "$result" "$expected"; then
             print_test_success "Got expected result"
         else
             print_test_failure "Result doesn't match expected" "$result"
@@ -169,6 +169,37 @@ check_server_connectivity() {
         echo
         return 1
     fi
+}
+
+# Check if result matches any of the expected values
+check_expected_match() {
+    local result="$1"
+    local expected="$2"
+    
+    # Handle special cases
+    if [ "$expected" = "ANY" ]; then
+        return 0
+    fi
+    
+    if [ "$expected" = "NXDOMAIN" ]; then
+        return 1  # This should be handled separately
+    fi
+    
+    # Split expected values by comma and check each one
+    local IFS=','
+    local expected_array=($expected)
+    
+    for expected_value in "${expected_array[@]}"; do
+        # Trim whitespace from expected value
+        expected_value=$(echo "$expected_value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        
+        # Check if the result contains this expected value
+        if echo "$result" | grep -q "$expected_value"; then
+            return 0
+        fi
+    done
+    
+    return 1
 }
 
 # Print final test summary

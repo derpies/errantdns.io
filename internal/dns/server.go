@@ -11,12 +11,13 @@ import (
 	"github.com/miekg/dns"
 
 	"errantdns.io/internal/models"
+	"errantdns.io/internal/resolver"
 	"errantdns.io/internal/storage"
 )
 
 // Server represents a DNS server instance
 type Server struct {
-	storage   storage.Storage
+	resolver  *resolver.Resolver
 	udpServer *dns.Server
 	tcpServer *dns.Server
 	port      string
@@ -69,9 +70,12 @@ func NewServer(storage storage.Storage, config *Config) *Server {
 		config = DefaultConfig()
 	}
 
+	resolverConfig := &resolver.Config{}
+	dnsResolver := resolver.NewResolver(storage, resolverConfig)
+
 	server := &Server{
-		storage: storage,
-		port:    config.Port,
+		resolver: dnsResolver,
+		port:     config.Port,
 	}
 
 	// Set up DNS request handler
@@ -211,9 +215,39 @@ func (s *Server) processQuestion(msg *dns.Msg, question *dns.Question) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	record, err := s.storage.LookupRecord(ctx, query)
+	// Handle record types that should return multiple records
+	if question.Qtype == dns.TypeSRV || question.Qtype == dns.TypeMX || question.Qtype == dns.TypeNS {
+		// For SRV, MX, and NS records, return all records
+		records, err := s.resolver.ResolveAll(ctx, query)
+		if err != nil {
+			return fmt.Errorf("resolver lookup failed: %w", err)
+		}
+
+		if len(records) == 0 {
+			log.Printf("No records found for %s %s", queryName, queryType)
+			msg.Rcode = dns.RcodeNameError
+			return nil
+		}
+
+		// Convert all records to DNS resource records
+		for _, record := range records {
+			rr, err := s.createResourceRecord(record, question.Qtype)
+			if err != nil {
+				return fmt.Errorf("failed to create resource record: %w", err)
+			}
+
+			if rr != nil {
+				msg.Answer = append(msg.Answer, rr)
+				log.Printf("Answered %s %s -> %s (priority: %d)", queryName, queryType, record.Target, record.Priority)
+			}
+		}
+
+		return nil
+	}
+
+	record, err := s.resolver.Resolve(ctx, query)
 	if err != nil {
-		return fmt.Errorf("storage lookup failed: %w", err)
+		return fmt.Errorf("resolver lookup failed: %w", err)
 	}
 
 	// Handle no record found
