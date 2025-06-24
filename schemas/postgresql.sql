@@ -11,13 +11,21 @@ CREATE TABLE IF NOT EXISTS dns_records (
     priority INTEGER NOT NULL DEFAULT 0,  -- Priority for MX records, general priority for others
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    serial INTEGER DEFAULT NULL,
+    mbox TEXT DEFAULT NULL,
+    refresh INTEGER DEFAULT NULL,
+    retry INTEGER DEFAULT NULL,
+    expire INTEGER DEFAULT NULL,
+    minttl INTEGER DEFAULT NULL,
+    weight INTEGER DEFAULT NULL,
+    port SMALLINT DEFAULT NULL,
     
     -- Constraints
     CONSTRAINT dns_records_ttl_check CHECK (ttl >= 0 AND ttl <= 2147483647),
     CONSTRAINT dns_records_priority_check CHECK (priority >= 0),
     CONSTRAINT dns_records_name_check CHECK (LENGTH(name) > 0),
     CONSTRAINT dns_records_target_check CHECK (LENGTH(target) > 0),
-    CONSTRAINT dns_records_type_check CHECK (record_type IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS'))
+    CONSTRAINT dns_records_type_check CHECK (record_type IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SOA', 'PTR', 'SRV'))
 );
 
 -- Create indexes for performance
@@ -114,6 +122,19 @@ INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
     ('sub2.wildcard-parent.internal', 'A', '10.0.4.12', 300, 10)
 ON CONFLICT DO NOTHING;
 
+-- Add SOA record example:
+INSERT INTO dns_records (name, record_type, target, ttl, priority, mbox, serial, refresh, retry, expire, minttl) VALUES
+    ('test.internal', 'SOA', 'ns1.test.internal', 86400, 1, 'admin.test.internal', 2024062301, 7200, 3600, 604800, 300);
+
+-- Add SRV record examples:
+INSERT INTO dns_records (name, record_type, target, ttl, priority, weight, port) VALUES
+    ('_http._tcp.test.internal', 'SRV', 'web1.test.internal', 300, 10, 5, 80),
+    ('_http._tcp.test.internal', 'SRV', 'web2.test.internal', 300, 10, 5, 80);
+
+-- Add PTR record example:
+INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
+    ('10.0.0.10.in-addr.arpa', 'PTR', 'test.internal', 300, 10);
+
 -- Create a view for easier record management and reporting
 CREATE OR REPLACE VIEW dns_records_view AS
 SELECT 
@@ -125,6 +146,14 @@ SELECT
     priority,
     created_at,
     updated_at,
+    mbox,
+    serial,
+    refresh,
+    retry,
+    expire,
+    minttl,
+    weight,
+    port,
     -- Additional computed columns for convenience
     CASE 
         WHEN record_type = 'MX' THEN priority
@@ -140,7 +169,15 @@ CREATE OR REPLACE FUNCTION add_dns_record(
     p_record_type VARCHAR(10),
     p_target TEXT,
     p_ttl INTEGER DEFAULT 300,
-    p_priority INTEGER DEFAULT 0
+    p_priority INTEGER DEFAULT 0,
+    p_mbox TEXT DEFAULT NULL,
+    p_serial INTEGER DEFAULT NULL,
+    p_refresh INTEGER DEFAULT NULL,
+    p_retry INTEGER DEFAULT NULL,
+    p_expire INTEGER DEFAULT NULL,
+    p_minttl INTEGER DEFAULT NULL,
+    p_weight INTEGER DEFAULT NULL,
+    p_port SMALLINT DEFAULT NULL
 ) RETURNS INTEGER AS $$
 DECLARE
     record_id INTEGER;
@@ -148,20 +185,39 @@ BEGIN
     -- Basic validation
     IF p_name IS NULL OR LENGTH(p_name) = 0 THEN
         RAISE EXCEPTION 'Name cannot be empty';
-    END IF;
-    
-    IF p_record_type IS NULL OR p_record_type NOT IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS') THEN
+    END IF; 
+
+    -- Validate record type
+    IF p_record_type IS NULL OR p_record_type NOT IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SOA', 'PTR', 'SRV') THEN
         RAISE EXCEPTION 'Invalid record type: %', p_record_type;
     END IF;
     
+    -- Validate target
     IF p_target IS NULL OR LENGTH(p_target) = 0 THEN
         RAISE EXCEPTION 'Target cannot be empty';
     END IF;
     
+    -- Validate TTL
     IF p_ttl < 0 OR p_ttl > 2147483647 THEN
         RAISE EXCEPTION 'TTL must be between 0 and 2147483647';
     END IF;
+
+    -- Validate SOA record
+    IF p_record_type = 'SOA' THEN
+        IF p_mbox IS NULL OR LENGTH(p_mbox) = 0 THEN
+            RAISE EXCEPTION 'Mbox cannot be empty for SOA records';
+        END IF;
+    END IF;
     
+    -- Validate SRV record
+    IF p_record_type = 'SRV' THEN
+        IF p_weight IS NULL OR p_weight < 0 OR p_weight > 65535 THEN
+            RAISE EXCEPTION 'Weight must be between 0 and 65535';
+        END IF;
+    END IF;
+    
+
+
     -- Insert the record
     INSERT INTO dns_records (name, record_type, target, ttl, priority)
     VALUES (LOWER(p_name), UPPER(p_record_type), p_target, p_ttl, p_priority)

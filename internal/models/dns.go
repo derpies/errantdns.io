@@ -23,6 +23,14 @@ type DNSRecord struct {
 	SubdomainLabels []string  `db:"subdomain_labels"`
 	IsWildcard      bool      `db:"is_wildcard"`
 	WildcardMask    uint64    `db:"wildcard_mask"` //bitstring
+	Serial          uint32    `db:"serial"`
+	Mbox            string    `db:"mbox"`
+	Refresh         uint32    `db:"refresh"`
+	Retry           uint32    `db:"retry"`
+	Expire          uint32    `db:"expire"`
+	Minttl          uint32    `db:"minttl"`
+	Weight          uint32    `db:"weight"`
+	Port            uint16    `db:"port"`
 }
 
 // RecordType represents supported DNS record types
@@ -131,6 +139,10 @@ func (r *DNSRecord) Validate() error {
 	case RecordTypeNS:
 		if err := r.validateNSRecord(); err != nil {
 			return fmt.Errorf("invalid NS record: %s: %w", r.Target, err)
+		}
+	case RecordTypeSRV:
+		if err := r.validateSRVRecord(); err != nil {
+			return fmt.Errorf("invalid SRV record: %s: %w", r.Target, err)
 		}
 	}
 

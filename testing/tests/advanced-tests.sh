@@ -57,22 +57,28 @@ test_round_robin_pool() {
     echo "  Expected: IPs should be from 10.0.3.10-13 range"
     echo "  Collecting samples over 30 seconds..."
     
-    # Collect extended samples
-    local extended_results
-    readarray -t extended_results < <(collect_responses_over_time "round-robin.internal" "A" 6 5)
+    # Collect extended samples (all results, not just unique)
+    local all_results
+    readarray -t all_results < <(collect_responses_over_time "round-robin.internal" "A" 6 5)
+    
+    # Get unique results
+    local unique_results
+    readarray -t unique_results < <(get_unique_responses "${all_results[@]}")
     
     # Define expected IP range
     local valid_ips=("10.0.3.10" "10.0.3.11" "10.0.3.12" "10.0.3.13")
     
+    echo "  All Results: ${all_results[*]}"
+    echo "  Unique IPs Found: ${unique_results[*]}"
+    echo "  Expected Range: ${valid_ips[*]}"
+    
     # Verify results are from expected range
-    if validate_ip_range "${extended_results[@]}" -- "${valid_ips[@]}" && [ ${#extended_results[@]} -gt 1 ]; then
-        echo "  ✓ All IPs are from expected range, got ${#extended_results[@]} unique"
-        echo "  Unique IPs Found: ${extended_results[*]}"
+    if validate_ip_range "${unique_results[@]}" -- "${valid_ips[@]}" && [ ${#unique_results[@]} -gt 1 ]; then
+        echo "  ✓ All IPs are from expected range, got ${#unique_results[@]} unique IPs"
         return 0
     else
         echo "  ✗ IPs not from expected range or insufficient variety"
-        echo "  Unique IPs Found: ${extended_results[*]}"
-        echo "  Expected Range: ${valid_ips[*]}"
+        echo "  Debug: unique_results length=${#unique_results[@]}, validation result=$?"
         return 1
     fi
 }

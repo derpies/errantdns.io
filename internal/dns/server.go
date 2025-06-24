@@ -39,6 +39,9 @@ type Stats struct {
 	TypeMX    int64
 	TypeTXT   int64
 	TypeNS    int64
+	TypeSRV   int64
+	TypeSOA   int64
+	TypePTR   int64
 	TypeOther int64
 }
 
@@ -330,6 +333,54 @@ func (s *Server) createResourceRecord(record *models.DNSRecord, qtype uint16) (d
 				Ns: dns.Fqdn(record.Target),
 			}, nil
 		}
+
+	case models.RecordTypeSOA:
+		if qtype == dns.TypeSOA {
+			return &dns.SOA{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(record.Name),
+					Rrtype: dns.TypeSOA,
+					Class:  dns.ClassINET,
+					Ttl:    record.TTL,
+				},
+				Ns:      dns.Fqdn(record.Target),
+				Mbox:    dns.Fqdn(record.Mbox),
+				Serial:  record.Serial,
+				Refresh: record.Refresh,
+				Retry:   record.Retry,
+				Expire:  record.Expire,
+				Minttl:  record.Minttl,
+			}, nil
+		}
+
+	case models.RecordTypePTR:
+		if qtype == dns.TypePTR {
+			return &dns.PTR{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(record.Name),
+					Rrtype: dns.TypePTR,
+					Class:  dns.ClassINET,
+					Ttl:    record.TTL,
+				},
+				Ptr: dns.Fqdn(record.Target),
+			}, nil
+		}
+
+	case models.RecordTypeSRV:
+		if qtype == dns.TypeSRV {
+			return &dns.SRV{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(record.Name),
+					Rrtype: dns.TypeSRV,
+					Class:  dns.ClassINET,
+					Ttl:    record.TTL,
+				},
+				Priority: uint16(record.Priority),
+				Weight:   uint16(record.Weight),
+				Port:     uint16(record.Port),
+				Target:   dns.Fqdn(record.Target),
+			}, nil
+		}
 	}
 
 	// No matching record type for the query
@@ -351,6 +402,12 @@ func (s *Server) updateTypeStats(qtype uint16) {
 		s.stats.TypeTXT++
 	case dns.TypeNS:
 		s.stats.TypeNS++
+	case dns.TypeSRV:
+		s.stats.TypeSRV++
+	case dns.TypeSOA:
+		s.stats.TypeSOA++
+	case dns.TypePTR:
+		s.stats.TypePTR++
 	default:
 		s.stats.TypeOther++
 	}
