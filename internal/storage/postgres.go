@@ -122,7 +122,23 @@ func (s *PostgresStorage) LookupRecord(ctx context.Context, query *models.Lookup
 // LookupRecords finds all DNS records matching the query, ordered by priority
 func (s *PostgresStorage) LookupRecords(ctx context.Context, query *models.LookupQuery) ([]*models.DNSRecord, error) {
 	sqlQuery := `
-		SELECT id, name, record_type, target, ttl, priority, created_at, updated_at
+		SELECT 	
+			id, 
+			name, 
+			record_type, 
+			target, 
+			ttl, 
+			priority, 
+			created_at, 
+			updated_at,
+		    serial, 
+			mbox, 
+			refresh, 
+			retry, 
+			expire, 
+			minttl, 
+			weight, 
+			port
 		FROM dns_records 
 		WHERE LOWER(name) = LOWER($1) AND record_type = $2
 		ORDER BY priority ASC
@@ -137,6 +153,12 @@ func (s *PostgresStorage) LookupRecords(ctx context.Context, query *models.Looku
 	var records []*models.DNSRecord
 	for rows.Next() {
 		var record models.DNSRecord
+
+		// Use nullable types for the new fields
+		var serial, refresh, retry, expire, minttl sql.NullInt32
+		var mbox sql.NullString
+		var weight, port sql.NullInt16
+
 		err := rows.Scan(
 			&record.ID,
 			&record.Name,
@@ -146,10 +168,45 @@ func (s *PostgresStorage) LookupRecords(ctx context.Context, query *models.Looku
 			&record.Priority,
 			&record.CreatedAt,
 			&record.UpdatedAt,
+			&serial,
+			&mbox,
+			&refresh,
+			&retry,
+			&expire,
+			&minttl,
+			&weight,
+			&port,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan record: %w", err)
 		}
+
+		// Convert nullable values to model fields
+		if serial.Valid {
+			record.Serial = uint32(serial.Int32)
+		}
+		if mbox.Valid {
+			record.Mbox = mbox.String
+		}
+		if refresh.Valid {
+			record.Refresh = uint32(refresh.Int32)
+		}
+		if retry.Valid {
+			record.Retry = uint32(retry.Int32)
+		}
+		if expire.Valid {
+			record.Expire = uint32(expire.Int32)
+		}
+		if minttl.Valid {
+			record.Minttl = uint32(minttl.Int32)
+		}
+		if weight.Valid {
+			record.Weight = uint32(weight.Int16)
+		}
+		if port.Valid {
+			record.Port = uint16(port.Int16)
+		}
+
 		records = append(records, &record)
 	}
 
@@ -180,9 +237,25 @@ func (s *PostgresStorage) LookupRecordGroup(ctx context.Context, query *models.L
 		return nil, fmt.Errorf("failed to get min priority for %s %s: %w", query.Name, query.Type, err)
 	}
 
-	// Now get all records with that minimum priority
+	// Now get all records with that minimum priority - ADD MISSING FIELDS:
 	recordsQuery := `
-		SELECT id, name, record_type, target, ttl, priority, created_at, updated_at
+		SELECT 	
+			id, 
+			name, 
+			record_type, 
+			target,
+			ttl, 
+			priority, 
+			created_at, 
+			updated_at,
+		    serial, 
+			mbox, 
+			refresh, 
+			retry, 
+			expire, 
+			minttl, 
+			weight, 
+			port
 		FROM dns_records 
 		WHERE LOWER(name) = LOWER($1) AND record_type = $2 AND priority = $3
 		ORDER BY id ASC
@@ -197,6 +270,12 @@ func (s *PostgresStorage) LookupRecordGroup(ctx context.Context, query *models.L
 	var records []*models.DNSRecord
 	for rows.Next() {
 		var record models.DNSRecord
+
+		// Use nullable types for the new fields
+		var serial, refresh, retry, expire, minttl sql.NullInt32
+		var mbox sql.NullString
+		var weight, port sql.NullInt16
+
 		err := rows.Scan(
 			&record.ID,
 			&record.Name,
@@ -206,10 +285,45 @@ func (s *PostgresStorage) LookupRecordGroup(ctx context.Context, query *models.L
 			&record.Priority,
 			&record.CreatedAt,
 			&record.UpdatedAt,
+			&serial,
+			&mbox,
+			&refresh,
+			&retry,
+			&expire,
+			&minttl,
+			&weight,
+			&port,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan record: %w", err)
 		}
+
+		// Convert nullable values to model fields
+		if serial.Valid {
+			record.Serial = uint32(serial.Int32)
+		}
+		if mbox.Valid {
+			record.Mbox = mbox.String
+		}
+		if refresh.Valid {
+			record.Refresh = uint32(refresh.Int32)
+		}
+		if retry.Valid {
+			record.Retry = uint32(retry.Int32)
+		}
+		if expire.Valid {
+			record.Expire = uint32(expire.Int32)
+		}
+		if minttl.Valid {
+			record.Minttl = uint32(minttl.Int32)
+		}
+		if weight.Valid {
+			record.Weight = uint32(weight.Int16)
+		}
+		if port.Valid {
+			record.Port = uint16(port.Int16)
+		}
+
 		records = append(records, &record)
 	}
 
@@ -229,10 +343,55 @@ func (s *PostgresStorage) CreateRecord(ctx context.Context, record *models.DNSRe
 	record.Normalize()
 
 	sqlQuery := `
-		INSERT INTO dns_records (name, record_type, target, ttl, priority)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO dns_records 
+			(
+				name, 
+				record_type, 
+				target, 
+				ttl, 
+				priority, 
+		        serial, 
+				mbox, 
+				refresh, 
+				retry, 
+				expire, 
+				minttl, 
+				weight, 
+				port
+			)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id, created_at, updated_at
 	`
+
+	// Convert to nullable values - only set if non-zero
+	var serial, refresh, retry, expire, minttl sql.NullInt32
+	var mbox sql.NullString
+	var weight, port sql.NullInt16
+
+	if record.Serial != 0 {
+		serial = sql.NullInt32{Int32: int32(record.Serial), Valid: true}
+	}
+	if record.Mbox != "" {
+		mbox = sql.NullString{String: record.Mbox, Valid: true}
+	}
+	if record.Refresh != 0 {
+		refresh = sql.NullInt32{Int32: int32(record.Refresh), Valid: true}
+	}
+	if record.Retry != 0 {
+		retry = sql.NullInt32{Int32: int32(record.Retry), Valid: true}
+	}
+	if record.Expire != 0 {
+		expire = sql.NullInt32{Int32: int32(record.Expire), Valid: true}
+	}
+	if record.Minttl != 0 {
+		minttl = sql.NullInt32{Int32: int32(record.Minttl), Valid: true}
+	}
+	if record.Weight != 0 {
+		weight = sql.NullInt16{Int16: int16(record.Weight), Valid: true}
+	}
+	if record.Port != 0 {
+		port = sql.NullInt16{Int16: int16(record.Port), Valid: true}
+	}
 
 	row := s.pool.QueryRow(ctx, s.connectionName, sqlQuery,
 		record.Name,
@@ -240,6 +399,14 @@ func (s *PostgresStorage) CreateRecord(ctx context.Context, record *models.DNSRe
 		record.Target,
 		record.TTL,
 		record.Priority,
+		serial,
+		mbox,
+		refresh,
+		retry,
+		expire,
+		minttl,
+		weight,
+		port,
 	)
 
 	err := row.Scan(&record.ID, &record.CreatedAt, &record.UpdatedAt)
@@ -260,10 +427,54 @@ func (s *PostgresStorage) UpdateRecord(ctx context.Context, record *models.DNSRe
 
 	sqlQuery := `
 		UPDATE dns_records 
-		SET name = $1, record_type = $2, target = $3, ttl = $4, priority = $5, updated_at = NOW()
-		WHERE id = $6
+		SET 
+			name = $1, 
+			record_type = $2, 
+			target = $3, 
+			ttl = $4, 
+			priority = $5,
+		    serial = $6, 
+			mbox = $7, 
+			refresh = $8, 
+			retry = $9, 
+			expire = $10, 
+		    minttl = $11, 
+			weight = $12, 
+			port = $13, 
+			updated_at = NOW()
+		WHERE id = $14
 		RETURNING updated_at
 	`
+
+	// Convert to nullable values
+	var serial, refresh, retry, expire, minttl sql.NullInt32
+	var mbox sql.NullString
+	var weight, port sql.NullInt16
+
+	if record.Serial != 0 {
+		serial = sql.NullInt32{Int32: int32(record.Serial), Valid: true}
+	}
+	if record.Mbox != "" {
+		mbox = sql.NullString{String: record.Mbox, Valid: true}
+	}
+	if record.Refresh != 0 {
+		refresh = sql.NullInt32{Int32: int32(record.Refresh), Valid: true}
+	}
+	if record.Retry != 0 {
+		retry = sql.NullInt32{Int32: int32(record.Retry), Valid: true}
+	}
+	if record.Expire != 0 {
+		expire = sql.NullInt32{Int32: int32(record.Expire), Valid: true}
+	}
+	if record.Minttl != 0 {
+		minttl = sql.NullInt32{Int32: int32(record.Minttl), Valid: true}
+	}
+	if record.Weight != 0 {
+		weight = sql.NullInt16{Int16: int16(record.Weight), Valid: true}
+	}
+	if record.Port != 0 {
+		port = sql.NullInt16{Int16: int16(record.Port), Valid: true}
+	}
 
 	row := s.pool.QueryRow(ctx, s.connectionName, sqlQuery,
 		record.Name,
@@ -271,6 +482,14 @@ func (s *PostgresStorage) UpdateRecord(ctx context.Context, record *models.DNSRe
 		record.Target,
 		record.TTL,
 		record.Priority,
+		serial,
+		mbox,
+		refresh,
+		retry,
+		expire,
+		minttl,
+		weight,
+		port,
 		record.ID,
 	)
 

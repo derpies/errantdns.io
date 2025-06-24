@@ -11,13 +11,21 @@ CREATE TABLE IF NOT EXISTS dns_records (
     priority INTEGER NOT NULL DEFAULT 0,  -- Priority for MX records, general priority for others
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    serial INTEGER DEFAULT NULL,
+    mbox TEXT DEFAULT NULL,
+    refresh INTEGER DEFAULT NULL,
+    retry INTEGER DEFAULT NULL,
+    expire INTEGER DEFAULT NULL,
+    minttl INTEGER DEFAULT NULL,
+    weight INTEGER DEFAULT NULL,
+    port SMALLINT DEFAULT NULL,
     
     -- Constraints
     CONSTRAINT dns_records_ttl_check CHECK (ttl >= 0 AND ttl <= 2147483647),
     CONSTRAINT dns_records_priority_check CHECK (priority >= 0),
     CONSTRAINT dns_records_name_check CHECK (LENGTH(name) > 0),
     CONSTRAINT dns_records_target_check CHECK (LENGTH(target) > 0),
-    CONSTRAINT dns_records_type_check CHECK (record_type IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS'))
+    CONSTRAINT dns_records_type_check CHECK (record_type IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SOA', 'PTR', 'SRV'))
 );
 
 -- Create indexes for performance
@@ -114,6 +122,64 @@ INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
     ('sub2.wildcard-parent.internal', 'A', '10.0.4.12', 300, 10)
 ON CONFLICT DO NOTHING;
 
+-- Add SOA record example:
+INSERT INTO dns_records (name, record_type, target, ttl, priority, mbox, serial, refresh, retry, expire, minttl) VALUES
+    ('test.internal', 'SOA', 'ns1.test.internal', 86400, 1, 'admin.test.internal', 2024062301, 7200, 3600, 604800, 300);
+
+-- Add SRV record examples:
+INSERT INTO dns_records (name, record_type, target, ttl, priority, weight, port) VALUES
+    ('_http._tcp.test.internal', 'SRV', 'web1.test.internal', 300, 10, 5, 80),
+    ('_http._tcp.test.internal', 'SRV', 'web2.test.internal', 300, 10, 5, 80);
+
+-- Add PTR record example:
+INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
+    ('10.0.0.10.in-addr.arpa', 'PTR', 'test.internal', 300, 10);
+
+-- Additional PTR records for reverse DNS
+INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
+('20.0.0.10.in-addr.arpa', 'PTR', 'mail.test.internal', 300, 10),
+('30.0.0.10.in-addr.arpa', 'PTR', 'api.test.internal', 300, 10),
+-- IPv6 PTR record (fd00::1 reverse)
+('1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.d.f.ip6.arpa', 'PTR', 'test.internal', 300, 10);
+
+-- Additional SRV records for service discovery
+INSERT INTO dns_records (name, record_type, target, ttl, priority, weight, port) VALUES
+-- HTTPS service
+('_https._tcp.test.internal', 'SRV', 'www.test.internal', 300, 10, 5, 443),
+-- SMTP service  
+('_smtp._tcp.test.internal', 'SRV', 'mail.test.internal', 300, 10, 5, 25),
+-- IMAP service
+('_imap._tcp.test.internal', 'SRV', 'mail.test.internal', 300, 10, 5, 143),
+-- SIP service
+('_sip._tcp.test.internal', 'SRV', 'sip.test.internal', 300, 10, 5, 5060),
+-- LDAP service  
+('_ldap._tcp.test.internal', 'SRV', 'ldap.test.internal', 300, 10, 5, 389),
+-- Multiple SRV with different priorities (for priority testing)
+('_web._tcp.test.internal', 'SRV', 'web1.test.internal', 300, 10, 5, 80),
+('_web._tcp.test.internal', 'SRV', 'web2.test.internal', 300, 20, 5, 80),
+('_web._tcp.test.internal', 'SRV', 'web3.test.internal', 300, 30, 5, 80),
+-- Multiple SRV with same priority but different weights (for weight testing)
+('_cluster._tcp.test.internal', 'SRV', 'node1.test.internal', 300, 10, 10, 8080),
+('_cluster._tcp.test.internal', 'SRV', 'node2.test.internal', 300, 10, 20, 8080),
+('_cluster._tcp.test.internal', 'SRV', 'node3.test.internal', 300, 10, 30, 8080);
+
+-- Additional A records needed for SRV targets
+INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
+('sip.test.internal', 'A', '10.0.0.40', 300, 10),
+('ldap.test.internal', 'A', '10.0.0.50', 300, 10),
+('web1.test.internal', 'A', '10.0.5.10', 300, 10),
+('web2.test.internal', 'A', '10.0.5.20', 300, 10),
+('web3.test.internal', 'A', '10.0.5.30', 300, 10),
+('node1.test.internal', 'A', '10.0.6.10', 300, 10),
+('node2.test.internal', 'A', '10.0.6.20', 300, 10),
+('node3.test.internal', 'A', '10.0.6.30', 300, 10);
+
+-- Additional NS records for the hosts that need A records
+INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
+('ns1.test.internal', 'A', '10.0.0.100', 86400, 10),
+('ns2.test.internal', 'A', '10.0.0.101', 86400, 10),
+('mail2.test.internal', 'A', '10.0.0.21', 300, 10);
+
 -- Create a view for easier record management and reporting
 CREATE OR REPLACE VIEW dns_records_view AS
 SELECT 
@@ -125,6 +191,14 @@ SELECT
     priority,
     created_at,
     updated_at,
+    mbox,
+    serial,
+    refresh,
+    retry,
+    expire,
+    minttl,
+    weight,
+    port,
     -- Additional computed columns for convenience
     CASE 
         WHEN record_type = 'MX' THEN priority
@@ -140,7 +214,15 @@ CREATE OR REPLACE FUNCTION add_dns_record(
     p_record_type VARCHAR(10),
     p_target TEXT,
     p_ttl INTEGER DEFAULT 300,
-    p_priority INTEGER DEFAULT 0
+    p_priority INTEGER DEFAULT 0,
+    p_mbox TEXT DEFAULT NULL,
+    p_serial INTEGER DEFAULT NULL,
+    p_refresh INTEGER DEFAULT NULL,
+    p_retry INTEGER DEFAULT NULL,
+    p_expire INTEGER DEFAULT NULL,
+    p_minttl INTEGER DEFAULT NULL,
+    p_weight INTEGER DEFAULT NULL,
+    p_port SMALLINT DEFAULT NULL
 ) RETURNS INTEGER AS $$
 DECLARE
     record_id INTEGER;
@@ -148,20 +230,39 @@ BEGIN
     -- Basic validation
     IF p_name IS NULL OR LENGTH(p_name) = 0 THEN
         RAISE EXCEPTION 'Name cannot be empty';
-    END IF;
-    
-    IF p_record_type IS NULL OR p_record_type NOT IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS') THEN
+    END IF; 
+
+    -- Validate record type
+    IF p_record_type IS NULL OR p_record_type NOT IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SOA', 'PTR', 'SRV') THEN
         RAISE EXCEPTION 'Invalid record type: %', p_record_type;
     END IF;
     
+    -- Validate target
     IF p_target IS NULL OR LENGTH(p_target) = 0 THEN
         RAISE EXCEPTION 'Target cannot be empty';
     END IF;
     
+    -- Validate TTL
     IF p_ttl < 0 OR p_ttl > 2147483647 THEN
         RAISE EXCEPTION 'TTL must be between 0 and 2147483647';
     END IF;
+
+    -- Validate SOA record
+    IF p_record_type = 'SOA' THEN
+        IF p_mbox IS NULL OR LENGTH(p_mbox) = 0 THEN
+            RAISE EXCEPTION 'Mbox cannot be empty for SOA records';
+        END IF;
+    END IF;
     
+    -- Validate SRV record
+    IF p_record_type = 'SRV' THEN
+        IF p_weight IS NULL OR p_weight < 0 OR p_weight > 65535 THEN
+            RAISE EXCEPTION 'Weight must be between 0 and 65535';
+        END IF;
+    END IF;
+    
+
+
     -- Insert the record
     INSERT INTO dns_records (name, record_type, target, ttl, priority)
     VALUES (LOWER(p_name), UPPER(p_record_type), p_target, p_ttl, p_priority)

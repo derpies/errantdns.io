@@ -11,12 +11,13 @@ import (
 	"github.com/miekg/dns"
 
 	"errantdns.io/internal/models"
+	"errantdns.io/internal/resolver"
 	"errantdns.io/internal/storage"
 )
 
 // Server represents a DNS server instance
 type Server struct {
-	storage   storage.Storage
+	resolver  *resolver.Resolver
 	udpServer *dns.Server
 	tcpServer *dns.Server
 	port      string
@@ -39,6 +40,9 @@ type Stats struct {
 	TypeMX    int64
 	TypeTXT   int64
 	TypeNS    int64
+	TypeSRV   int64
+	TypeSOA   int64
+	TypePTR   int64
 	TypeOther int64
 }
 
@@ -66,9 +70,12 @@ func NewServer(storage storage.Storage, config *Config) *Server {
 		config = DefaultConfig()
 	}
 
+	resolverConfig := &resolver.Config{}
+	dnsResolver := resolver.NewResolver(storage, resolverConfig)
+
 	server := &Server{
-		storage: storage,
-		port:    config.Port,
+		resolver: dnsResolver,
+		port:     config.Port,
 	}
 
 	// Set up DNS request handler
@@ -208,9 +215,39 @@ func (s *Server) processQuestion(msg *dns.Msg, question *dns.Question) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	record, err := s.storage.LookupRecord(ctx, query)
+	// Handle record types that should return multiple records
+	if question.Qtype == dns.TypeSRV || question.Qtype == dns.TypeMX || question.Qtype == dns.TypeNS {
+		// For SRV, MX, and NS records, return all records
+		records, err := s.resolver.ResolveAll(ctx, query)
+		if err != nil {
+			return fmt.Errorf("resolver lookup failed: %w", err)
+		}
+
+		if len(records) == 0 {
+			log.Printf("No records found for %s %s", queryName, queryType)
+			msg.Rcode = dns.RcodeNameError
+			return nil
+		}
+
+		// Convert all records to DNS resource records
+		for _, record := range records {
+			rr, err := s.createResourceRecord(record, question.Qtype)
+			if err != nil {
+				return fmt.Errorf("failed to create resource record: %w", err)
+			}
+
+			if rr != nil {
+				msg.Answer = append(msg.Answer, rr)
+				log.Printf("Answered %s %s -> %s (priority: %d)", queryName, queryType, record.Target, record.Priority)
+			}
+		}
+
+		return nil
+	}
+
+	record, err := s.resolver.Resolve(ctx, query)
 	if err != nil {
-		return fmt.Errorf("storage lookup failed: %w", err)
+		return fmt.Errorf("resolver lookup failed: %w", err)
 	}
 
 	// Handle no record found
@@ -330,6 +367,54 @@ func (s *Server) createResourceRecord(record *models.DNSRecord, qtype uint16) (d
 				Ns: dns.Fqdn(record.Target),
 			}, nil
 		}
+
+	case models.RecordTypeSOA:
+		if qtype == dns.TypeSOA {
+			return &dns.SOA{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(record.Name),
+					Rrtype: dns.TypeSOA,
+					Class:  dns.ClassINET,
+					Ttl:    record.TTL,
+				},
+				Ns:      dns.Fqdn(record.Target),
+				Mbox:    dns.Fqdn(record.Mbox),
+				Serial:  record.Serial,
+				Refresh: record.Refresh,
+				Retry:   record.Retry,
+				Expire:  record.Expire,
+				Minttl:  record.Minttl,
+			}, nil
+		}
+
+	case models.RecordTypePTR:
+		if qtype == dns.TypePTR {
+			return &dns.PTR{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(record.Name),
+					Rrtype: dns.TypePTR,
+					Class:  dns.ClassINET,
+					Ttl:    record.TTL,
+				},
+				Ptr: dns.Fqdn(record.Target),
+			}, nil
+		}
+
+	case models.RecordTypeSRV:
+		if qtype == dns.TypeSRV {
+			return &dns.SRV{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(record.Name),
+					Rrtype: dns.TypeSRV,
+					Class:  dns.ClassINET,
+					Ttl:    record.TTL,
+				},
+				Priority: uint16(record.Priority),
+				Weight:   uint16(record.Weight),
+				Port:     uint16(record.Port),
+				Target:   dns.Fqdn(record.Target),
+			}, nil
+		}
 	}
 
 	// No matching record type for the query
@@ -351,6 +436,12 @@ func (s *Server) updateTypeStats(qtype uint16) {
 		s.stats.TypeTXT++
 	case dns.TypeNS:
 		s.stats.TypeNS++
+	case dns.TypeSRV:
+		s.stats.TypeSRV++
+	case dns.TypeSOA:
+		s.stats.TypeSOA++
+	case dns.TypePTR:
+		s.stats.TypePTR++
 	default:
 		s.stats.TypeOther++
 	}
