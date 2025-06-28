@@ -43,6 +43,7 @@ type Stats struct {
 	TypeSRV   int64
 	TypeSOA   int64
 	TypePTR   int64
+	TypeCAA   int64
 	TypeOther int64
 }
 
@@ -442,6 +443,8 @@ func (s *Server) updateTypeStats(qtype uint16) {
 		s.stats.TypeSOA++
 	case dns.TypePTR:
 		s.stats.TypePTR++
+	case dns.TypeCAA:
+		s.stats.TypeCAA++
 	default:
 		s.stats.TypeOther++
 	}

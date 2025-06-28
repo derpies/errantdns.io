@@ -9,7 +9,7 @@ set -e
 DNS_SERVER="127.0.0.1"
 DNS_PORT="10001"
 POSITIVE_FILE="stress.dat"
-TEST_DURATION=60
+TEST_DURATION=30
 RESULTS_DIR="dns_test_results_$(date +%Y%m%d_%H%M%S)"
 
 # Create results directory

@@ -156,9 +156,9 @@ func reportStats(ctx context.Context, dnsServer *dns.Server, storage storage.Sto
 				dnsStats.QueriesReceived, dnsStats.QueriesAnswered,
 				dnsStats.QueriesNXDomain, dnsStats.QueriesError)
 
-			log.Printf("Query Types - A: %d, AAAA: %d, CNAME: %d, MX: %d, TXT: %d, NS: %d, SOA: %d, PTR: %d, SRV: %d, Other: %d",
+			log.Printf("Query Types - A: %d, AAAA: %d, CNAME: %d, MX: %d, TXT: %d, NS: %d, SOA: %d, PTR: %d, SRV: %d, CAA: %d, Other: %d",
 				dnsStats.TypeA, dnsStats.TypeAAAA, dnsStats.TypeCNAME,
-				dnsStats.TypeMX, dnsStats.TypeTXT, dnsStats.TypeNS, dnsStats.TypeSOA, dnsStats.TypePTR, dnsStats.TypeSRV, dnsStats.TypeOther)
+				dnsStats.TypeMX, dnsStats.TypeTXT, dnsStats.TypeNS, dnsStats.TypeSOA, dnsStats.TypePTR, dnsStats.TypeSRV, dnsStats.TypeCAA, dnsStats.TypeOther)
 
 			// Try to get cache stats using a type assertion that will work
 			// We need to check if the storage has a GetCacheStats method

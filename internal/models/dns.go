@@ -31,6 +31,7 @@ type DNSRecord struct {
 	Minttl          uint32    `db:"minttl"`
 	Weight          uint32    `db:"weight"`
 	Port            uint16    `db:"port"`
+	Tag             string    `db:"tag"`
 }
 
 // RecordType represents supported DNS record types
@@ -46,12 +47,13 @@ const (
 	RecordTypeSOA   RecordType = "SOA"
 	RecordTypePTR   RecordType = "PTR"
 	RecordTypeSRV   RecordType = "SRV"
+	RecordTypeCAA   RecordType = "CAA"
 )
 
 // IsValid returns true if the record type is supported
 func (rt RecordType) IsValid() bool {
 	switch rt {
-	case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeTXT, RecordTypeMX, RecordTypeNS, RecordTypeSOA, RecordTypePTR, RecordTypeSRV:
+	case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeTXT, RecordTypeMX, RecordTypeNS, RecordTypeSOA, RecordTypePTR, RecordTypeSRV, RecordTypeCAA:
 		return true
 	default:
 		return false
@@ -143,6 +145,10 @@ func (r *DNSRecord) Validate() error {
 	case RecordTypeSRV:
 		if err := r.validateSRVRecord(); err != nil {
 			return fmt.Errorf("invalid SRV record: %s: %w", r.Target, err)
+		}
+	case RecordTypeCAA:
+		if err := r.validateCAARecord(); err != nil {
+			return fmt.Errorf("invalid CAA record: %s: %w", r.Target, err)
 		}
 	}
 
