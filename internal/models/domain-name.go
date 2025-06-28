@@ -88,6 +88,55 @@ func (r *DNSRecord) validateDomainName() error {
 	return nil
 }
 
+// TODO: This is a copy of validateDomainName;  this could probably be made more efficient by combining the two.
+// validateDomainName validates the domain name and extracts ETLD/apex information
+func (r *DNSRecord) validateDomainNameOther(domain string) error {
+
+	if len(domain) == 0 || len(domain) > 253 {
+		return fmt.Errorf("domain name length invalid: %d characters (must be 1-253)", len(domain))
+	}
+
+	// Handle absolute vs relative names
+	domain = strings.TrimSuffix(domain, ".")
+
+	// Empty after removing dot is invalid
+	if len(domain) == 0 {
+		return fmt.Errorf("domain name cannot be empty")
+	}
+
+	// Extract ETLD using Public Suffix List and set DNSRecord fields
+	if err := r.extractAndSetETLDInfo(domain); err != nil {
+		return fmt.Errorf("ETLD extraction failed: %w", err)
+	}
+
+	// Split into labels for validation
+	labels := strings.Split(domain, ".")
+	if len(labels) == 0 {
+		return fmt.Errorf("domain name must contain at least one label")
+	}
+
+	// Validate each label
+	for i, label := range labels {
+		if err := r.validateLabel(label); err != nil {
+			return fmt.Errorf("invalid label '%s': %w", label, err)
+		}
+
+		// Additional TLD validation for last label (if multiple labels exist)
+		if len(labels) > 1 && i == len(labels)-1 {
+			if err := r.validateTLD(label); err != nil {
+				return fmt.Errorf("invalid TLD '%s': %w", label, err)
+			}
+		}
+	}
+
+	// Detect and process wildcards
+	if err := r.detectAndSetWildcards(); err != nil {
+		return fmt.Errorf("wildcard processing failed: %w", err)
+	}
+
+	return nil
+}
+
 // extractAndSetETLDInfo extracts ETLD using Public Suffix List and sets DNSRecord fields
 func (r *DNSRecord) extractAndSetETLDInfo(domain string) error {
 	// Get the effective TLD + 1 (the registrable domain)

@@ -19,13 +19,14 @@ CREATE TABLE IF NOT EXISTS dns_records (
     minttl INTEGER DEFAULT NULL,
     weight INTEGER DEFAULT NULL,
     port SMALLINT DEFAULT NULL,
+    tag TEXT DEFAULT NULL,
     
     -- Constraints
     CONSTRAINT dns_records_ttl_check CHECK (ttl >= 0 AND ttl <= 2147483647),
     CONSTRAINT dns_records_priority_check CHECK (priority >= 0),
     CONSTRAINT dns_records_name_check CHECK (LENGTH(name) > 0),
     CONSTRAINT dns_records_target_check CHECK (LENGTH(target) > 0),
-    CONSTRAINT dns_records_type_check CHECK (record_type IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SOA', 'PTR', 'SRV'))
+    CONSTRAINT dns_records_type_check CHECK (record_type IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SOA', 'PTR', 'SRV', 'CAA'))
 );
 
 -- Create indexes for performance
@@ -51,6 +52,11 @@ CREATE INDEX IF NOT EXISTS idx_dns_records_created_at
 
 CREATE INDEX IF NOT EXISTS idx_dns_records_updated_at 
     ON dns_records(updated_at);
+
+-- Index for CAA records
+CREATE INDEX IF NOT EXISTS idx_dns_records_caa_tag 
+    ON dns_records(LOWER(name), record_type, tag) 
+    WHERE record_type = 'CAA';
 
 -- Function to automatically update the updated_at timestamp
 CREATE OR REPLACE FUNCTION update_dns_records_updated_at()
@@ -180,6 +186,31 @@ INSERT INTO dns_records (name, record_type, target, ttl, priority) VALUES
 ('ns2.test.internal', 'A', '10.0.0.101', 86400, 10),
 ('mail2.test.internal', 'A', '10.0.0.21', 300, 10);
 
+
+-- Add sample CAA records for testing
+INSERT INTO dns_records (name, record_type, target, ttl, priority, tag) VALUES
+    -- Basic CAA records for test.internal
+    ('test.internal', 'CAA', 'letsencrypt.org', 300, 0, 'issue'),
+    ('test.internal', 'CAA', 'digicert.com', 300, 0, 'issue'),
+    ('test.internal', 'CAA', 'mailto:security@test.internal', 300, 0, 'iodef'),
+    
+    -- Wildcard restriction example
+    ('secure.test.internal', 'CAA', ';', 300, 0, 'issuewild'),
+    
+    -- Critical flag example
+    ('critical.test.internal', 'CAA', 'sectigo.com', 300, 128, 'issue'),
+    
+    -- HTTPS iodef example
+    ('api.test.internal', 'CAA', 'https://test.internal/caa-incident', 300, 0, 'iodef'),
+    
+    -- Multiple CAs allowed with different priorities
+    ('multi-ca.test.internal', 'CAA', 'letsencrypt.org', 300, 10, 'issue'),
+    ('multi-ca.test.internal', 'CAA', 'digicert.com', 300, 20, 'issue'),
+    
+    -- Deny all example
+    ('no-certs.test.internal', 'CAA', ';', 300, 0, 'issue')
+ON CONFLICT DO NOTHING;
+
 -- Create a view for easier record management and reporting
 CREATE OR REPLACE VIEW dns_records_view AS
 SELECT 
@@ -199,11 +230,22 @@ SELECT
     minttl,
     weight,
     port,
+    tag,
     -- Additional computed columns for convenience
     CASE 
         WHEN record_type = 'MX' THEN priority
+        WHEN record_type = 'CAA' THEN priority
         ELSE NULL 
-    END as mx_priority,
+    END as record_priority,
+    CASE 
+        WHEN record_type = 'CAA' THEN 
+            CASE priority 
+                WHEN 0 THEN 'non-critical'
+                WHEN 128 THEN 'critical'
+                ELSE 'invalid'
+            END
+        ELSE NULL
+    END as caa_flag_description,
     EXTRACT(EPOCH FROM (updated_at - created_at)) as age_seconds
 FROM dns_records
 ORDER BY name, record_type, priority DESC;
@@ -222,7 +264,8 @@ CREATE OR REPLACE FUNCTION add_dns_record(
     p_expire INTEGER DEFAULT NULL,
     p_minttl INTEGER DEFAULT NULL,
     p_weight INTEGER DEFAULT NULL,
-    p_port SMALLINT DEFAULT NULL
+    p_port SMALLINT DEFAULT NULL,
+    p_tag TEXT DEFAULT NULL
 ) RETURNS INTEGER AS $$
 DECLARE
     record_id INTEGER;
@@ -233,7 +276,7 @@ BEGIN
     END IF; 
 
     -- Validate record type
-    IF p_record_type IS NULL OR p_record_type NOT IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SOA', 'PTR', 'SRV') THEN
+    IF p_record_type IS NULL OR p_record_type NOT IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SOA', 'PTR', 'SRV', 'CAA') THEN
         RAISE EXCEPTION 'Invalid record type: %', p_record_type;
     END IF;
     
@@ -261,11 +304,24 @@ BEGIN
         END IF;
     END IF;
     
-
+    -- Validate CAA record
+    IF p_record_type = 'CAA' THEN
+        IF p_tag IS NULL OR LENGTH(p_tag) = 0 THEN
+            RAISE EXCEPTION 'CAA records require a tag';
+        END IF;
+        
+        IF LOWER(p_tag) NOT IN ('issue', 'issuewild', 'iodef') THEN
+            RAISE EXCEPTION 'CAA tag must be issue, issuewild, or iodef';
+        END IF;
+        
+        IF p_priority NOT IN (0, 128) THEN
+            RAISE EXCEPTION 'CAA flag (priority) must be 0 or 128';
+        END IF;
+    END IF;
 
     -- Insert the record
-    INSERT INTO dns_records (name, record_type, target, ttl, priority)
-    VALUES (LOWER(p_name), UPPER(p_record_type), p_target, p_ttl, p_priority)
+    INSERT INTO dns_records (name, record_type, target, ttl, priority, mbox, serial, refresh, retry, expire, minttl, weight, port, tag)
+    VALUES (LOWER(p_name), UPPER(p_record_type), p_target, p_ttl, p_priority, p_mbox, p_serial, p_refresh, p_retry, p_expire, p_minttl, p_weight, p_port, p_tag)
     RETURNING id INTO record_id;
     
     RETURN record_id;
