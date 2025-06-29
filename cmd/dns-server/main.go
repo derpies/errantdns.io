@@ -14,6 +14,7 @@ import (
 	"errantdns.io/internal/config"
 	"errantdns.io/internal/dns"
 	"errantdns.io/internal/pgsqlpool"
+	"errantdns.io/internal/redis"
 	"errantdns.io/internal/storage"
 )
 
@@ -65,7 +66,26 @@ func main() {
 		}
 
 		memCache := cache.NewMemoryCache(cacheConfig)
-		finalStorage = storage.NewCachedStorage(pgStorage, memCache, cfg.Priority.TieBreaker)
+
+		if cfg.Redis.Enabled {
+			// Initialize Redis client
+			log.Printf("Initializing Redis connection to %s", cfg.Redis.Address)
+			redis.NewClient(cfg.Redis.ClientName, cfg.Redis.Address, false)
+
+			// Test Redis connection
+			if err := redis.PingClient(cfg.Redis.ClientName); err != nil {
+				log.Fatalf("Failed to connect to Redis: %v", err)
+			}
+			log.Printf("Connected to Redis at %s", cfg.Redis.Address)
+
+			// Three-tier caching: Memory → Redis → PostgreSQL
+			finalStorage = storage.NewRedisCacheStorage(pgStorage, memCache, cfg.Redis.ClientName, "errantdns:", cfg.Priority.TieBreaker)
+			log.Printf("Three-tier cache enabled: Memory → Redis → PostgreSQL")
+		} else {
+			// Two-tier caching: Memory → PostgreSQL
+			finalStorage = storage.NewCachedStorage(pgStorage, memCache, cfg.Priority.TieBreaker)
+			log.Printf("Two-tier cache enabled: Memory → PostgreSQL")
+		}
 
 		log.Printf("Cache enabled: max entries=%d, cleanup interval=%v",
 			cfg.Cache.MaxEntries, cfg.Cache.CleanupInterval)
@@ -103,7 +123,7 @@ func main() {
 	}()
 
 	// Start statistics reporting
-	go reportStats(ctx, dnsServer, finalStorage)
+	go reportStats(ctx, dnsServer, finalStorage, cfg)
 
 	// Wait for shutdown signal
 	<-sigChan
@@ -126,6 +146,11 @@ func main() {
 		log.Printf("Error closing storage: %v", err)
 	}
 
+	if cfg.Redis.Enabled {
+		redis.Close(cfg.Redis.ClientName)
+		log.Printf("Redis connection closed")
+	}
+
 	// Close database pool
 	if err := pool.Close(); err != nil {
 		log.Printf("Error closing database pool: %v", err)
@@ -140,7 +165,7 @@ func main() {
 }
 
 // reportStats periodically reports server and cache statistics
-func reportStats(ctx context.Context, dnsServer *dns.Server, storage storage.Storage) {
+func reportStats(ctx context.Context, dnsServer *dns.Server, storage storage.Storage, cfg *config.Config) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -166,11 +191,44 @@ func reportStats(ctx context.Context, dnsServer *dns.Server, storage storage.Sto
 				GetCacheStats() cache.Stats
 			}
 
-			if cacheProvider, ok := storage.(CacheStatsProvider); ok {
-				cacheStats := cacheProvider.GetCacheStats()
-				log.Printf("Cache Stats - Entries: %d, Hits: %d, Misses: %d, Hit Rate: %.2f%%, Evictions: %d",
-					cacheStats.Entries, cacheStats.Hits, cacheStats.Misses,
-					cacheStats.HitRate, cacheStats.Evictions)
+			// Cache statistics reporting
+			if cfg.Cache.Enabled {
+				if cfg.Redis.Enabled {
+					// Three-tier cache stats
+					log.Printf("Cache Status: Three-tier (Memory + Redis)")
+
+					// Try to get memory cache stats
+					type MemoryCacheProvider interface {
+						GetCacheStats() cache.Stats
+					}
+
+					// For now, log that we need to implement Redis-specific stats
+					log.Printf("L1 Cache (Memory): Stats collection needs implementation")
+					log.Printf("L2 Cache (Redis): Connected to %s", cfg.Redis.Address)
+
+					// Check Redis connectivity
+					if err := redis.PingClient(cfg.Redis.ClientName); err != nil {
+						log.Printf("L2 Cache (Redis): Connection error - %v", err)
+					} else {
+						log.Printf("L2 Cache (Redis): Connection healthy")
+					}
+				} else {
+					// Two-tier cache stats
+					log.Printf("Cache Status: Two-tier (Memory only)")
+
+					type CacheStatsProvider interface {
+						GetCacheStats() cache.Stats
+					}
+
+					if cacheProvider, ok := storage.(CacheStatsProvider); ok {
+						cacheStats := cacheProvider.GetCacheStats()
+						log.Printf("L1 Cache Stats - Entries: %d, Hits: %d, Misses: %d, Hit Rate: %.2f%%, Evictions: %d",
+							cacheStats.Entries, cacheStats.Hits, cacheStats.Misses,
+							cacheStats.HitRate, cacheStats.Evictions)
+					}
+				}
+			} else {
+				log.Printf("Cache Status: Disabled (Direct database access)")
 			}
 		}
 	}
