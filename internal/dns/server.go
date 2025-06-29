@@ -239,7 +239,7 @@ func (s *Server) processQuestion(msg *dns.Msg, question *dns.Question) error {
 
 			if rr != nil {
 				msg.Answer = append(msg.Answer, rr)
-				log.Printf("Answered %s %s -> %s (priority: %d)", queryName, queryType, record.Target, record.Priority)
+				log.Printf("Answered %s %s -> %s (priority: %d) [DB]", queryName, queryType, record.Target, record.Priority)
 			}
 		}
 
@@ -266,7 +266,7 @@ func (s *Server) processQuestion(msg *dns.Msg, question *dns.Question) error {
 
 	if rr != nil {
 		msg.Answer = append(msg.Answer, rr)
-		log.Printf("Answered %s %s -> %s", queryName, queryType, record.Target)
+		log.Printf("Answered %s %s -> %s [DB]", queryName, queryType, record.Target)
 	} else {
 		// Record type mismatch
 		log.Printf("Record type mismatch for %s: found %s, requested %s",

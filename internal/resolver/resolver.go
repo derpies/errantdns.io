@@ -20,11 +20,149 @@ type Config struct {
 	// For example: cache settings, recursion limits, etc.
 }
 
+// ResolverResult represents a DNS resolution result with source information
+type ResolverResult struct {
+	Record *models.DNSRecord
+	Source storage.CacheSource
+}
+
+// ResolverGroupResult represents a group resolution result with source information
+type ResolverGroupResult struct {
+	Records []*models.DNSRecord
+	Source  storage.CacheSource
+}
+
 // NewResolver creates a new DNS resolver instance
 func NewResolver(storage storage.Storage, config *Config) *Resolver {
 	return &Resolver{
 		storage: storage,
 	}
+}
+
+// ResolveWithSource performs DNS resolution with source tracking
+func (r *Resolver) ResolveWithSource(ctx context.Context, query *models.LookupQuery) (*ResolverResult, error) {
+	switch query.Type {
+	case models.RecordTypeSOA:
+		return r.resolveSOAWithSource(ctx, query)
+	default:
+		// Check if storage supports source tracking
+		if sourceStorage, ok := r.storage.(interface {
+			LookupRecordWithSource(context.Context, *models.LookupQuery) (*storage.LookupResult, error)
+		}); ok {
+			result, err := sourceStorage.LookupRecordWithSource(ctx, query)
+			if err != nil {
+				return nil, err
+			}
+			if result == nil {
+				return nil, nil
+			}
+			return &ResolverResult{
+				Record: result.Record,
+				Source: result.Source,
+			}, nil
+		}
+
+		// Fallback to regular lookup without source tracking
+		record, err := r.storage.LookupRecord(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		return &ResolverResult{
+			Record: record,
+			Source: storage.SourceDatabase, // Assume database if no source tracking
+		}, nil
+	}
+}
+
+// ResolveAllWithSource returns all records with source tracking
+func (r *Resolver) ResolveAllWithSource(ctx context.Context, query *models.LookupQuery) (*ResolverGroupResult, error) {
+	switch query.Type {
+	case models.RecordTypeSOA:
+		result, err := r.resolveSOAWithSource(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			return nil, nil
+		}
+		return &ResolverGroupResult{
+			Records: []*models.DNSRecord{result.Record},
+			Source:  result.Source,
+		}, nil
+	default:
+		// Check if storage supports source tracking
+		if sourceStorage, ok := r.storage.(interface {
+			LookupRecordGroupWithSource(context.Context, *models.LookupQuery) (*storage.LookupGroupResult, error)
+		}); ok {
+			result, err := sourceStorage.LookupRecordGroupWithSource(ctx, query)
+			if err != nil {
+				return nil, err
+			}
+			if result == nil {
+				return nil, nil
+			}
+			return &ResolverGroupResult{
+				Records: result.Records,
+				Source:  result.Source,
+			}, nil
+		}
+
+		// Fallback to regular lookup without source tracking
+		records, err := r.storage.LookupRecords(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		return &ResolverGroupResult{
+			Records: records,
+			Source:  storage.SourceDatabase,
+		}, nil
+	}
+}
+
+// resolveSOAWithSource implements SOA resolution with source tracking
+func (r *Resolver) resolveSOAWithSource(ctx context.Context, query *models.LookupQuery) (*ResolverResult, error) {
+	domains := r.generateDomainHierarchy(query.Name)
+
+	for _, domain := range domains {
+		soaQuery := &models.LookupQuery{
+			Name: domain,
+			Type: models.RecordTypeSOA,
+		}
+
+		// Check if storage supports source tracking
+		if sourceStorage, ok := r.storage.(interface {
+			LookupRecordWithSource(context.Context, *models.LookupQuery) (*storage.LookupResult, error)
+		}); ok {
+			result, err := sourceStorage.LookupRecordWithSource(ctx, soaQuery)
+			if err != nil {
+				return nil, err
+			}
+			if result != nil && result.Record != nil {
+				resultRecord := *result.Record
+				resultRecord.Name = query.Name
+				return &ResolverResult{
+					Record: &resultRecord,
+					Source: result.Source,
+				}, nil
+			}
+		} else {
+			// Fallback to regular lookup
+			record, err := r.storage.LookupRecord(ctx, soaQuery)
+			if err != nil {
+				return nil, err
+			}
+			if record != nil {
+				resultRecord := *record
+				resultRecord.Name = query.Name
+				return &ResolverResult{
+					Record: &resultRecord,
+					Source: storage.SourceDatabase,
+				}, nil
+			}
+		}
+	}
+
+	return nil, nil
 }
 
 // Resolve performs DNS resolution with DNS-specific logic

@@ -19,6 +19,9 @@ type Config struct {
 	// Cache configuration
 	Cache CacheConfig
 
+	// Redis configuration
+	Redis RedisConfig
+
 	// Priority configuration
 	Priority PriorityConfig
 
@@ -53,6 +56,19 @@ type CacheConfig struct {
 	MaxEntries      int
 	CleanupInterval time.Duration
 	DefaultTTL      time.Duration
+}
+
+// RedisConfig holds Redis configuration
+type RedisConfig struct {
+	Enabled         bool          `json:"enabled"`
+	Address         string        `json:"address"`
+	Password        string        `json:"password"`
+	Database        int           `json:"database"`
+	ClientName      string        `json:"client_name"`
+	PoolSize        int           `json:"pool_size"`
+	MinIdleConns    int           `json:"min_idle_conns"`
+	ConnMaxIdleTime time.Duration `json:"conn_max_idle_time"`
+	DialTimeout     time.Duration `json:"dial_timeout"`
 }
 
 // PriorityConfig holds priority selection configuration
@@ -92,6 +108,19 @@ func Load() *Config {
 			DefaultTTL:      300 * time.Second,
 		},
 
+		// Redis defaults
+		Redis: RedisConfig{
+			Enabled:         false, // Disabled by default
+			Address:         "localhost:6379",
+			Password:        "",
+			Database:        0,
+			ClientName:      "errantdns",
+			PoolSize:        10,
+			MinIdleConns:    3,
+			ConnMaxIdleTime: 240 * time.Second,
+			DialTimeout:     2 * time.Second,
+		},
+
 		// Priority defaults
 		Priority: PriorityConfig{
 			TieBreaker: "round_robin",
@@ -102,6 +131,7 @@ func Load() *Config {
 	loadDNSConfig(cfg)
 	loadDatabaseConfig(cfg)
 	loadCacheConfig(cfg)
+	loadRedisConfig(cfg)
 	loadPriorityConfig(cfg)
 	loadServerConfig(cfg)
 
@@ -206,6 +236,57 @@ func loadCacheConfig(cfg *Config) {
 	}
 }
 
+// loadRedisConfig loads Redis configuration from environment
+func loadRedisConfig(cfg *Config) {
+	if env := os.Getenv("REDIS_ENABLED"); env != "" {
+		if val, err := strconv.ParseBool(env); err == nil {
+			cfg.Redis.Enabled = val
+		}
+	}
+
+	if env := os.Getenv("REDIS_ADDRESS"); env != "" {
+		cfg.Redis.Address = env
+	}
+
+	if env := os.Getenv("REDIS_PASSWORD"); env != "" {
+		cfg.Redis.Password = env
+	}
+
+	if env := os.Getenv("REDIS_DATABASE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil && val >= 0 {
+			cfg.Redis.Database = val
+		}
+	}
+
+	if env := os.Getenv("REDIS_CLIENT_NAME"); env != "" {
+		cfg.Redis.ClientName = env
+	}
+
+	if env := os.Getenv("REDIS_POOL_SIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil && val > 0 {
+			cfg.Redis.PoolSize = val
+		}
+	}
+
+	if env := os.Getenv("REDIS_MIN_IDLE_CONNS"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil && val >= 0 {
+			cfg.Redis.MinIdleConns = val
+		}
+	}
+
+	if env := os.Getenv("REDIS_CONN_MAX_IDLE_TIME"); env != "" {
+		if val, err := time.ParseDuration(env); err == nil {
+			cfg.Redis.ConnMaxIdleTime = val
+		}
+	}
+
+	if env := os.Getenv("REDIS_DIAL_TIMEOUT"); env != "" {
+		if val, err := time.ParseDuration(env); err == nil {
+			cfg.Redis.DialTimeout = val
+		}
+	}
+}
+
 // loadPriorityConfig loads priority configuration from environment
 func loadPriorityConfig(cfg *Config) {
 	if env := os.Getenv("PRIORITY_TIE_BREAKER"); env != "" {
@@ -249,6 +330,11 @@ func (c *Config) Validate() error {
 	// Cache validation
 	if err := c.Cache.Validate(); err != nil {
 		return fmt.Errorf("cache config error: %w", err)
+	}
+
+	// Redis validation
+	if err := c.Redis.Validate(); err != nil {
+		return fmt.Errorf("redis config error: %w", err)
 	}
 
 	// Priority validation
@@ -311,6 +397,39 @@ func (cache *CacheConfig) Validate() error {
 		if cache.DefaultTTL < 0 {
 			return &ValidationError{Field: "DefaultTTL", Message: "cannot be negative"}
 		}
+	}
+
+	return nil
+}
+
+// Validate validates Redis configuration
+func (redis *RedisConfig) Validate() error {
+	if !redis.Enabled {
+		return nil // Skip validation if Redis is disabled
+	}
+
+	if redis.Address == "" {
+		return &ValidationError{Field: "Redis.Address", Message: "cannot be empty when Redis is enabled"}
+	}
+
+	if redis.ClientName == "" {
+		return &ValidationError{Field: "Redis.ClientName", Message: "cannot be empty when Redis is enabled"}
+	}
+
+	if redis.Database < 0 {
+		return &ValidationError{Field: "Redis.Database", Message: "cannot be negative"}
+	}
+
+	if redis.PoolSize <= 0 {
+		return &ValidationError{Field: "Redis.PoolSize", Message: "must be greater than 0"}
+	}
+
+	if redis.MinIdleConns < 0 {
+		return &ValidationError{Field: "Redis.MinIdleConns", Message: "cannot be negative"}
+	}
+
+	if redis.MinIdleConns > redis.PoolSize {
+		return &ValidationError{Field: "Redis.MinIdleConns", Message: "cannot be greater than pool size"}
 	}
 
 	return nil
