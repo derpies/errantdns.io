@@ -48,12 +48,13 @@ const (
 	RecordTypePTR   RecordType = "PTR"
 	RecordTypeSRV   RecordType = "SRV"
 	RecordTypeCAA   RecordType = "CAA"
+	RecordTypeTLSA  RecordType = "TLSA"
 )
 
 // IsValid returns true if the record type is supported
 func (rt RecordType) IsValid() bool {
 	switch rt {
-	case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeTXT, RecordTypeMX, RecordTypeNS, RecordTypeSOA, RecordTypePTR, RecordTypeSRV, RecordTypeCAA:
+	case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeTXT, RecordTypeMX, RecordTypeNS, RecordTypeSOA, RecordTypePTR, RecordTypeSRV, RecordTypeCAA, RecordTypeTLSA:
 		return true
 	default:
 		return false
@@ -149,6 +150,10 @@ func (r *DNSRecord) Validate() error {
 	case RecordTypeCAA:
 		if err := r.validateCAARecord(); err != nil {
 			return fmt.Errorf("invalid CAA record: %s: %w", r.Target, err)
+		}
+	case RecordTypeTLSA:
+		if err := r.validateTLSARecord(); err != nil {
+			return fmt.Errorf("invalid TLSA record: %s: %w", r.Target, err)
 		}
 	}
 
