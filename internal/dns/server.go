@@ -13,6 +13,7 @@ import (
 	"errantdns.io/internal/models"
 	"errantdns.io/internal/resolver"
 	"errantdns.io/internal/storage"
+	"errantdns.io/internal/logging"
 )
 
 // Server represents a DNS server instance
@@ -103,27 +104,27 @@ func NewServer(storage storage.Storage, config *Config) *Server {
 
 // Start starts both UDP and TCP DNS servers
 func (s *Server) Start(ctx context.Context) error {
-	log.Printf("Starting DNS server on port %s", s.port)
+	logging.Info("dns", "Starting DNS server on port %s", s.port)
 
 	// Start UDP server in goroutine
 	go func() {
 		if err := s.udpServer.ListenAndServe(); err != nil {
-			log.Printf("UDP server error: %v", err)
+			logging.Info("dns", "UDP server error: %v", "details", fmt.Sprintf("UDP server error: %v", err))
 		}
 	}()
 
 	// Start TCP server in goroutine
 	go func() {
 		if err := s.tcpServer.ListenAndServe(); err != nil {
-			log.Printf("TCP server error: %v", err)
+			logging.Info("dns", "TCP server error: %v", "details", fmt.Sprintf("TCP server error: %v", err))
 		}
 	}()
 
-	log.Printf("DNS server started successfully")
+	logging.Info("dns", "DNS server started successfully")
 
 	// Wait for context cancellation
 	<-ctx.Done()
-	log.Printf("DNS server shutting down...")
+	logging.Info("dns", "DNS server shutting down...")
 
 	return s.Stop()
 }
@@ -148,7 +149,7 @@ func (s *Server) Stop() error {
 		return fmt.Errorf("TCP server shutdown error: %w", tcpErr)
 	}
 
-	log.Printf("DNS server stopped successfully")
+	logging.Info("dns", "DNS server stopped successfully")
 	return nil
 }
 
@@ -170,7 +171,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	// Process each question in the request
 	for _, question := range r.Question {
 		if err := s.processQuestion(&msg, &question); err != nil {
-			log.Printf("Error processing question %s %s: %v",
+			logging.Error("dns", "Error processing question %s %s: %v", nil,
 				question.Name, dns.TypeToString[question.Qtype], err)
 			msg.Rcode = dns.RcodeServerFailure
 			s.stats.QueriesError++
@@ -193,7 +194,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 	// Send the response
 	if err := w.WriteMsg(&msg); err != nil {
-		log.Printf("Failed to write DNS response: %v", err)
+		logging.Error("dns", "Failed to write DNS response: %v", nil, err)
 		s.stats.QueriesError++
 	}
 }
@@ -204,7 +205,7 @@ func (s *Server) processQuestion(msg *dns.Msg, question *dns.Question) error {
 	queryName := question.Name
 	queryType := dns.TypeToString[question.Qtype]
 
-	log.Printf("DNS Query: %s %s", queryName, queryType)
+	logging.Debug("dns", "DNS Query received", "domain", queryName, "type", queryType)
 
 	// Update type statistics
 	s.updateTypeStats(question.Qtype)
@@ -225,7 +226,7 @@ func (s *Server) processQuestion(msg *dns.Msg, question *dns.Question) error {
 		}
 
 		if len(records) == 0 {
-			log.Printf("No records found for %s %s", queryName, queryType)
+			logging.Info("dns", "No records found for %s %s", "details", fmt.Sprintf("No records found for %s %s", queryName, queryType))
 			msg.Rcode = dns.RcodeNameError
 			return nil
 		}
@@ -239,7 +240,7 @@ func (s *Server) processQuestion(msg *dns.Msg, question *dns.Question) error {
 
 			if rr != nil {
 				msg.Answer = append(msg.Answer, rr)
-				log.Printf("Answered %s %s -> %s (priority: %d) [DB]", queryName, queryType, record.Target, record.Priority)
+				logging.Info("dns", "Answered %s %s -> %s (priority: %d) [DB]", "details", fmt.Sprintf("Answered %s %s -> %s (priority: %d) [DB]", queryName, queryType, record.Target, record.Priority))
 			}
 		}
 
@@ -253,7 +254,7 @@ func (s *Server) processQuestion(msg *dns.Msg, question *dns.Question) error {
 
 	// Handle no record found
 	if record == nil {
-		log.Printf("No record found for %s %s", queryName, queryType)
+		logging.LogNXDOMAIN(queryName, queryType, 0)
 		msg.Rcode = dns.RcodeNameError
 		return nil
 	}
@@ -266,7 +267,7 @@ func (s *Server) processQuestion(msg *dns.Msg, question *dns.Question) error {
 
 	if rr != nil {
 		msg.Answer = append(msg.Answer, rr)
-		log.Printf("Answered %s %s -> %s [DB]", queryName, queryType, record.Target)
+		logging.Info("dns", "Answered %s %s -> %s [DB]", "details", fmt.Sprintf("Answered %s %s -> %s [DB]", queryName, queryType, record.Target))
 	} else {
 		// Record type mismatch
 		log.Printf("Record type mismatch for %s: found %s, requested %s",

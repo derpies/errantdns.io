@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -29,8 +30,23 @@ type Config struct {
 	MaxConcurrentQueries int
 	ShutdownTimeout      time.Duration
 
+	// Logging configuration
+	Logging LoggingConfig
+
 	// Logging
 	LogLevel string
+}
+
+// LoggingConfig holds logging configuration
+type LoggingConfig struct {
+	Level           string  `json:"level"`
+	Directory       string  `json:"directory"`
+	AppLogFile      string  `json:"app_log_file"`
+	QueryLogFile    string  `json:"query_log_file"`
+	ErrorLogFile    string  `json:"error_log_file"`
+	EnableConsole   bool    `json:"enable_console"`
+	QuerySampleRate float64 `json:"query_sample_rate"`
+	BufferSize      int     `json:"buffer_size"`
 }
 
 // DatabaseConfig holds PostgreSQL database configuration
@@ -125,6 +141,18 @@ func Load() *Config {
 		Priority: PriorityConfig{
 			TieBreaker: "round_robin",
 		},
+
+		// Logging defaults
+		Logging: LoggingConfig{
+			Level:           "INFO",
+			Directory:       "logs",
+			AppLogFile:      "app.log",
+			QueryLogFile:    "queries.log",
+			ErrorLogFile:    "errors.log",
+			EnableConsole:   true,
+			QuerySampleRate: 0.01, // 1%
+			BufferSize:      1000,
+		},
 	}
 
 	// Override with environment variables
@@ -133,9 +161,50 @@ func Load() *Config {
 	loadCacheConfig(cfg)
 	loadRedisConfig(cfg)
 	loadPriorityConfig(cfg)
+	loadLoggingConfig(cfg)
 	loadServerConfig(cfg)
 
 	return cfg
+}
+
+func loadLoggingConfig(cfg *Config) {
+	if env := os.Getenv("LOG_LEVEL"); env != "" {
+		cfg.Logging.Level = strings.ToUpper(env)
+	}
+
+	if env := os.Getenv("LOG_DIRECTORY"); env != "" {
+		cfg.Logging.Directory = env
+	}
+
+	if env := os.Getenv("LOG_APP_FILE"); env != "" {
+		cfg.Logging.AppLogFile = env
+	}
+
+	if env := os.Getenv("LOG_QUERY_FILE"); env != "" {
+		cfg.Logging.QueryLogFile = env
+	}
+
+	if env := os.Getenv("LOG_ERROR_FILE"); env != "" {
+		cfg.Logging.ErrorLogFile = env
+	}
+
+	if env := os.Getenv("LOG_ENABLE_CONSOLE"); env != "" {
+		if val, err := strconv.ParseBool(env); err == nil {
+			cfg.Logging.EnableConsole = val
+		}
+	}
+
+	if env := os.Getenv("LOG_QUERY_SAMPLE_RATE"); env != "" {
+		if val, err := strconv.ParseFloat(env, 64); err == nil && val >= 0 && val <= 1 {
+			cfg.Logging.QuerySampleRate = val
+		}
+	}
+
+	if env := os.Getenv("LOG_BUFFER_SIZE"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil && val > 0 {
+			cfg.Logging.BufferSize = val
+		}
+	}
 }
 
 // loadDNSConfig loads DNS-specific configuration from environment
@@ -347,6 +416,11 @@ func (c *Config) Validate() error {
 		return &ValidationError{Field: "MaxConcurrentQueries", Message: "must be greater than 0"}
 	}
 
+	// Logging validation
+	if err := c.Logging.Validate(); err != nil {
+		return fmt.Errorf("logging config error: %w", err)
+	}
+
 	return nil
 }
 
@@ -397,6 +471,33 @@ func (cache *CacheConfig) Validate() error {
 		if cache.DefaultTTL < 0 {
 			return &ValidationError{Field: "DefaultTTL", Message: "cannot be negative"}
 		}
+	}
+
+	return nil
+}
+
+func (logging *LoggingConfig) Validate() error {
+	validLevels := map[string]bool{
+		"DEBUG": true,
+		"INFO":  true,
+		"WARN":  true,
+		"ERROR": true,
+	}
+
+	if !validLevels[strings.ToUpper(logging.Level)] {
+		return &ValidationError{Field: "Level", Message: "must be DEBUG, INFO, WARN, or ERROR"}
+	}
+
+	if logging.Directory == "" {
+		return &ValidationError{Field: "Directory", Message: "cannot be empty"}
+	}
+
+	if logging.QuerySampleRate < 0 || logging.QuerySampleRate > 1 {
+		return &ValidationError{Field: "QuerySampleRate", Message: "must be between 0 and 1"}
+	}
+
+	if logging.BufferSize <= 0 {
+		return &ValidationError{Field: "BufferSize", Message: "must be greater than 0"}
 	}
 
 	return nil
