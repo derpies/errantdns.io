@@ -23,7 +23,7 @@ func main() {
 	// Load configuration
 	cfg := config.Load()
 	if err := cfg.Validate(); err != nil {
-		log.Fatalf("Configuration validation failed: %v", err)
+		logging.Error("main", "Configuration validation failed: %v", fmt.Errorf("Configuration validation failed: %v", err)); os.Exit(1)
 	}
 
 	// Initialize logging EARLY - before any other operations
@@ -39,7 +39,7 @@ func main() {
 	}
 
 	if err := logging.Initialize(loggingConfig); err != nil {
-		log.Fatalf("Failed to initialize logging: %v", err)
+		logging.Error("main", "Failed to initialize logging: %v", fmt.Errorf("Failed to initialize logging: %v", err)); os.Exit(1)
 	}
 
 	// Now use the new logging system
@@ -49,7 +49,7 @@ func main() {
 		"cache_enabled", cfg.Cache.Enabled,
 		"redis_enabled", cfg.Redis.Enabled)
 
-	log.Printf("Starting ErrantDNS server on port %s", cfg.DNSPort)
+	logging.Info("main", "Starting ErrantDNS server on port %s", cfg.DNSPort)
 
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -74,10 +74,10 @@ func main() {
 
 	pgStorage, err := storage.NewPostgresStorage(ctx, pool, cfg.Database.ConnectionName, storageConfig, cfg.Priority.TieBreaker)
 	if err != nil {
-		log.Fatalf("Failed to create storage: %v", err)
+		logging.Error("main", "Failed to create storage: %v", fmt.Errorf("Failed to create storage: %v", err)); os.Exit(1)
 	}
 
-	log.Printf("Connected to PostgreSQL database at %s:%d/%s",
+	logging.Info("main", "Connected to PostgreSQL database at %s:%d/%s",
 		cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName)
 
 	// Create cache layer if enabled
@@ -93,36 +93,36 @@ func main() {
 
 		if cfg.Redis.Enabled {
 			// Initialize Redis client
-			log.Printf("Initializing Redis connection to %s", cfg.Redis.Address)
+			logging.Info("main", "Initializing Redis connection to %s", "details", fmt.Sprintf("Initializing Redis connection to %s", cfg.Redis.Address))
 			redis.NewClient(cfg.Redis.ClientName, cfg.Redis.Address, false)
 
 			// Test Redis connection
 			if err := redis.PingClient(cfg.Redis.ClientName); err != nil {
-				log.Fatalf("Failed to connect to Redis: %v", err)
+				logging.Error("main", "Failed to connect to Redis: %v", fmt.Errorf("Failed to connect to Redis: %v", err)); os.Exit(1)
 			}
-			log.Printf("Connected to Redis at %s", cfg.Redis.Address)
+			logging.Info("main", "Connected to Redis at %s", cfg.Redis.Address)
 
 			// Three-tier caching: Memory → Redis → PostgreSQL
 			finalStorage = storage.NewRedisCacheStorage(pgStorage, memCache, cfg.Redis.ClientName, "errantdns:", cfg.Priority.TieBreaker)
-			log.Printf("Three-tier cache enabled: Memory → Redis → PostgreSQL")
+			logging.Info("main", "Three-tier cache enabled: Memory → Redis → PostgreSQL")
 		} else {
 			// Two-tier caching: Memory → PostgreSQL
 			finalStorage = storage.NewCachedStorage(pgStorage, memCache, cfg.Priority.TieBreaker)
-			log.Printf("Two-tier cache enabled: Memory → PostgreSQL")
+			logging.Info("main", "Two-tier cache enabled: Memory → PostgreSQL")
 		}
 
 		log.Printf("Cache enabled: max entries=%d, cleanup interval=%v",
 			cfg.Cache.MaxEntries, cfg.Cache.CleanupInterval)
 	} else {
-		log.Printf("Cache disabled")
+		logging.Info("main", "Cache disabled")
 	}
 
 	// Test storage health
 	if err := finalStorage.Health(ctx); err != nil {
-		log.Fatalf("Storage health check failed: %v", err)
+		logging.Error("main", "Storage health check failed: %v", fmt.Errorf("Storage health check failed: %v", err)); os.Exit(1)
 	}
 
-	log.Printf("Storage layer initialized successfully")
+	logging.Info("main", "Storage layer initialized successfully")
 
 	// Create DNS server
 	dnsConfig := &dns.Config{
@@ -141,7 +141,7 @@ func main() {
 	// Start DNS server in background
 	go func() {
 		if err := dnsServer.Start(ctx); err != nil {
-			log.Printf("DNS server error: %v", err)
+			logging.Info("main", "DNS server error: %v", "details", fmt.Sprintf("DNS server error: %v", err))
 			cancel()
 		}
 	}()
@@ -151,7 +151,7 @@ func main() {
 
 	// Wait for shutdown signal
 	<-sigChan
-	log.Printf("Received shutdown signal, starting graceful shutdown...")
+	logging.Info("main", "Received shutdown signal, starting graceful shutdown...")
 
 	// Cancel context to signal shutdown
 	cancel()
@@ -162,29 +162,29 @@ func main() {
 
 	// Shutdown DNS server
 	if err := dnsServer.Stop(); err != nil {
-		log.Printf("Error during DNS server shutdown: %v", err)
+		logging.Error("main", "Error during DNS server shutdown: %v", nil, err)
 	}
 
 	// Close storage
 	if err := finalStorage.Close(); err != nil {
-		log.Printf("Error closing storage: %v", err)
+		logging.Error("main", "Error closing storage: %v", nil, err)
 	}
 
 	if cfg.Redis.Enabled {
 		redis.Close(cfg.Redis.ClientName)
-		log.Printf("Redis connection closed")
+		logging.Info("main", "Redis connection closed")
 	}
 
 	// Close database pool
 	if err := pool.Close(); err != nil {
-		log.Printf("Error closing database pool: %v", err)
+		logging.Error("main", "Error closing database pool: %v", nil, err)
 	}
 
 	select {
 	case <-shutdownCtx.Done():
-		log.Printf("Shutdown timeout exceeded")
+		logging.Info("main", "Shutdown timeout exceeded")
 	default:
-		log.Printf("ErrantDNS server shutdown completed")
+		logging.Info("main", "ErrantDNS server shutdown completed")
 	}
 
 	defer func() {
@@ -225,7 +225,7 @@ func reportStats(ctx context.Context, dnsServer *dns.Server, storage storage.Sto
 			if cfg.Cache.Enabled {
 				if cfg.Redis.Enabled {
 					// Three-tier cache stats
-					log.Printf("Cache Status: Three-tier (Memory + Redis)")
+					logging.Info("main", "Cache Status: Three-tier (Memory + Redis)")
 
 					// Try to get memory cache stats
 					type MemoryCacheProvider interface {
@@ -233,18 +233,18 @@ func reportStats(ctx context.Context, dnsServer *dns.Server, storage storage.Sto
 					}
 
 					// For now, log that we need to implement Redis-specific stats
-					log.Printf("L1 Cache (Memory): Stats collection needs implementation")
-					log.Printf("L2 Cache (Redis): Connected to %s", cfg.Redis.Address)
+					logging.Info("main", "L1 Cache (Memory): Stats collection needs implementation")
+					logging.Info("main", "L2 Cache (Redis): Connected to %s", "details", fmt.Sprintf("L2 Cache (Redis): Connected to %s", cfg.Redis.Address))
 
 					// Check Redis connectivity
 					if err := redis.PingClient(cfg.Redis.ClientName); err != nil {
-						log.Printf("L2 Cache (Redis): Connection error - %v", err)
+						logging.Info("main", "L2 Cache (Redis): Connection error - %v", "details", fmt.Sprintf("L2 Cache (Redis): Connection error - %v", err))
 					} else {
-						log.Printf("L2 Cache (Redis): Connection healthy")
+						logging.Info("main", "L2 Cache (Redis): Connection healthy")
 					}
 				} else {
 					// Two-tier cache stats
-					log.Printf("Cache Status: Two-tier (Memory only)")
+					logging.Info("main", "Cache Status: Two-tier (Memory only)")
 
 					type CacheStatsProvider interface {
 						GetCacheStats() cache.Stats
@@ -258,7 +258,7 @@ func reportStats(ctx context.Context, dnsServer *dns.Server, storage storage.Sto
 					}
 				}
 			} else {
-				log.Printf("Cache Status: Disabled (Direct database access)")
+				logging.Info("main", "Cache Status: Disabled (Direct database access)")
 			}
 		}
 	}
