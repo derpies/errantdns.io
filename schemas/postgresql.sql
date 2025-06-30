@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS dns_records (
     CONSTRAINT dns_records_priority_check CHECK (priority >= 0),
     CONSTRAINT dns_records_name_check CHECK (LENGTH(name) > 0),
     CONSTRAINT dns_records_target_check CHECK (LENGTH(target) > 0),
-    CONSTRAINT dns_records_type_check CHECK (record_type IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SOA', 'PTR', 'SRV', 'CAA'))
+    CONSTRAINT dns_records_type_check CHECK (record_type IN ('A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SOA', 'PTR', 'SRV', 'CAA', 'TLSA'))
 );
 
 -- Create indexes for performance
@@ -209,6 +209,25 @@ INSERT INTO dns_records (name, record_type, target, ttl, priority, tag) VALUES
     
     -- Deny all example
     ('no-certs.test.internal', 'CAA', ';', 300, 0, 'issue')
+ON CONFLICT DO NOTHING;
+
+-- Add TLSA-specific fields (if not using the generic approach)
+-- TLSA records can use the existing priority, weight, and port fields:
+-- priority = certificate_usage (0-3)
+-- weight = selector (0-1) 
+-- port = matching_type (0-2)
+-- target = certificate_association_data (hex string)
+
+-- Add sample TLSA records for testing:
+INSERT INTO dns_records (name, record_type, target, ttl, priority, weight, port) VALUES
+    -- HTTPS certificate for test.internal (usage=3, selector=1, matchtype=1)
+    ('_443._tcp.test.internal', 'TLSA', '1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF', 300, 3, 1, 1),
+    
+    -- SMTP certificate for mail.test.internal (usage=2, selector=0, matchtype=1)  
+    ('_25._tcp.mail.test.internal', 'TLSA', 'ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890', 300, 2, 0, 1),
+    
+    -- IMAP certificate (usage=3, selector=1, matchtype=2 - SHA-512)
+    ('_993._tcp.mail.test.internal', 'TLSA', 'FEDCBA0987654321FEDCBA0987654321FEDCBA0987654321FEDCBA0987654321FEDCBA0987654321FEDCBA0987654321FEDCBA0987654321FEDCBA0987654321', 300, 3, 1, 2)
 ON CONFLICT DO NOTHING;
 
 -- Create a view for easier record management and reporting

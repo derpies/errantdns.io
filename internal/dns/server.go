@@ -10,10 +10,10 @@ import (
 
 	"github.com/miekg/dns"
 
+	"errantdns.io/internal/logging"
 	"errantdns.io/internal/models"
 	"errantdns.io/internal/resolver"
 	"errantdns.io/internal/storage"
-	"errantdns.io/internal/logging"
 )
 
 // Server represents a DNS server instance
@@ -46,6 +46,7 @@ type Stats struct {
 	TypePTR   int64
 	TypeCAA   int64
 	TypeOther int64
+	TypeTLSA  int64
 }
 
 // Config holds configuration for the DNS server
@@ -417,6 +418,21 @@ func (s *Server) createResourceRecord(record *models.DNSRecord, qtype uint16) (d
 				Target:   dns.Fqdn(record.Target),
 			}, nil
 		}
+	case models.RecordTypeTLSA: // <-- ADD THIS CASE
+		if qtype == dns.TypeTLSA {
+			return &dns.TLSA{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(record.Name),
+					Rrtype: dns.TypeTLSA,
+					Class:  dns.ClassINET,
+					Ttl:    record.TTL,
+				},
+				Usage:        uint8(record.Priority), // Certificate Usage (0-3)
+				Selector:     uint8(record.Weight),   // Selector (0-1)
+				MatchingType: uint8(record.Port),     // Matching Type (0-2)
+				Certificate:  record.Target,          // Certificate Association Data (hex)
+			}, nil
+		}
 	}
 
 	// No matching record type for the query
@@ -446,6 +462,8 @@ func (s *Server) updateTypeStats(qtype uint16) {
 		s.stats.TypePTR++
 	case dns.TypeCAA:
 		s.stats.TypeCAA++
+	case dns.TypeTLSA:
+		s.stats.TypeTLSA++
 	default:
 		s.stats.TypeOther++
 	}
