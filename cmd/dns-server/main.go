@@ -13,6 +13,7 @@ import (
 	"errantdns.io/internal/cache"
 	"errantdns.io/internal/config"
 	"errantdns.io/internal/dns"
+	"errantdns.io/internal/logging"
 	"errantdns.io/internal/pgsqlpool"
 	"errantdns.io/internal/redis"
 	"errantdns.io/internal/storage"
@@ -24,6 +25,29 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("Configuration validation failed: %v", err)
 	}
+
+	// Initialize logging EARLY - before any other operations
+	loggingConfig := &logging.Config{
+		Level:           logging.LogLevel(cfg.Logging.Level),
+		Directory:       cfg.Logging.Directory,
+		AppLogFile:      cfg.Logging.AppLogFile,
+		QueryLogFile:    cfg.Logging.QueryLogFile,
+		ErrorLogFile:    cfg.Logging.ErrorLogFile,
+		EnableConsole:   cfg.Logging.EnableConsole,
+		QuerySampleRate: cfg.Logging.QuerySampleRate,
+		BufferSize:      cfg.Logging.BufferSize,
+	}
+
+	if err := logging.Initialize(loggingConfig); err != nil {
+		log.Fatalf("Failed to initialize logging: %v", err)
+	}
+
+	// Now use the new logging system
+	logging.Info("main", "ErrantDNS server starting",
+		"version", "1.0.0",
+		"dns_port", cfg.DNSPort,
+		"cache_enabled", cfg.Cache.Enabled,
+		"redis_enabled", cfg.Redis.Enabled)
 
 	log.Printf("Starting ErrantDNS server on port %s", cfg.DNSPort)
 
@@ -162,6 +186,12 @@ func main() {
 	default:
 		log.Printf("ErrantDNS server shutdown completed")
 	}
+
+	defer func() {
+		if err := logging.GetLogger().Close(); err != nil {
+			logging.Error("main", "Failed to close logging", err)
+		}
+	}()
 }
 
 // reportStats periodically reports server and cache statistics
